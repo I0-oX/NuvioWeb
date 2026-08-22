@@ -671,6 +671,20 @@ function normalizeTrackCodecText(value) {
   return cleanDisplayText(value).toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function isAssSubtitleCodec(value) {
+  const text = cleanDisplayText(value);
+  if (!text) {
+    return false;
+  }
+  // Matroska codec id (S_TEXT/ASS|SSA), MIME aliases, and short codec names
+  // (ass|ssa) reported by ffprobe / the companion tracks endpoint.
+  return (
+    /^S_TEXT\/(?:ASS|SSA)$/i.test(text) ||
+    /^(?:text\/x-ass|application\/x-ass|text\/x-ssa|application\/x-ssa)$/i.test(text) ||
+    /^(?:ass|ssa|advanced substation alpha|substation alpha)$/i.test(text)
+  );
+}
+
 function isUnsupportedEmbeddedSubtitleTrack(track = {}) {
   const codecText = normalizeTrackCodecText(
     track?.codec || track?.subtitleCodec || track?.codec_name || track?.format || ""
@@ -4374,7 +4388,13 @@ export const PlayerScreen = {
                 .trim()
                 .toUpperCase(),
           forced: isForcedSubtitleTrack(track),
-          codec: cleanDisplayText(track?.codec || track?.subtitleCodec || track?.codec_name),
+          codec: cleanDisplayText(
+            track?.codec ||
+              track?.subtitleCodec ||
+              track?.codec_name ||
+              track?.codecId ||
+              track?.codec_id
+          ),
           format: cleanDisplayText(track?.format || track?.format_name),
           raw: track
         };
@@ -13361,7 +13381,8 @@ export const PlayerScreen = {
         endSeconds: startSeconds + EMBEDDED_TEXT_SUBTITLE_WINDOW_SECONDS,
         includeAssBody:
           this.webOsEmbeddedTextSubtitleUsingAss ||
-          /^S_TEXT\/(?:ASS|SSA)$/i.test(String(track?.codec || ""))
+          isAssSubtitleCodec(track?.codec) ||
+          isAssSubtitleCodec(track?.codec_name)
       });
       if (
         requestToken !== this.webOsEmbeddedTextSubtitleLoadToken ||
@@ -13381,7 +13402,9 @@ export const PlayerScreen = {
         Boolean(assBody) &&
         (this.webOsEmbeddedTextSubtitleUsingAss ||
           windowData.hasAdvancedAssOverrideTags ||
-          /^S_TEXT\/(?:ASS|SSA)$/i.test(String(windowData.codecId || track?.codec || "")));
+          isAssSubtitleCodec(windowData.codecId) ||
+          isAssSubtitleCodec(track?.codec) ||
+          isAssSubtitleCodec(track?.codec_name));
       if (shouldUseAss) {
         const assResult = await this.applyAssSubtitleBody({
           body: assBody,
@@ -13425,9 +13448,16 @@ export const PlayerScreen = {
         this.destroyAssSubtitleRenderer();
         this.webOsEmbeddedTextSubtitleUsingAss = false;
       }
+      const isAssTrack =
+        isAssSubtitleCodec(windowData.codecId) ||
+        isAssSubtitleCodec(track?.codec) ||
+        isAssSubtitleCodec(track?.codec_name) ||
+        Boolean(windowData.assBody);
       const cues = this.parseSubtitleCues(windowData.body);
       const shouldUseHtml =
-        this.webOsEmbeddedTextSubtitleUsingHtml || Boolean(windowData.hasAssOverrideTags);
+        this.webOsEmbeddedTextSubtitleUsingHtml ||
+        Boolean(windowData.hasAssOverrideTags) ||
+        (isAssTrack && cues.length > 0);
       if (!shouldUseHtml || (!cues.length && !this.webOsEmbeddedTextSubtitleUsingHtml)) {
         return false;
       }
