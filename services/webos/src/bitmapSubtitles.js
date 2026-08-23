@@ -1058,7 +1058,9 @@ function normalizeTextSubtitlePayload(track, payload) {
   if (!text) return "";
 
   var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
-  if (isRawAssControlPayload(assEvent)) {
+  // ASS-specific heuristic: never apply it to plain SRT/WebVTT/UTF8 text,
+  // where "Comment: ..." or numeric CSV can be legitimate display text.
+  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(assEvent)) {
     return "";
   }
   var fields = assEvent.split(",");
@@ -1074,11 +1076,10 @@ function normalizeTextSubtitlePayload(track, payload) {
     text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
     text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || "";
-  } else if (isAssTextSubtitleTrack(track) && !isRawAssControlPayload(assEvent)) {
-    text = assEvent;
   } else if (isAssTextSubtitleTrack(track)) {
-    return "";
+    text = assEvent;
   }
+
   return text.replace(/\n{2,}/g, "\n").trim();
 }
 
@@ -1221,7 +1222,7 @@ function getAssDialogueText(track, frame) {
 
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
-  if (!text || isRawAssControlPayload(text)) return "";
+  if (!text) return "";
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
