@@ -9,8 +9,6 @@ const ASS_SECTION_HEADERS = [
   "[Events]"
 ];
 
-const ASS_CONTENT_TYPES = ["text/x-ssa", "application/x-ssa", "text/x-ass", "application/x-ass"];
-
 function normalizeBody(body) {
   return String(body || "")
     .replace(/^\uFEFF/, "")
@@ -41,32 +39,24 @@ function hasAssDialogueEvents(normalized) {
 // Start and End timestamps. Prose transcripts that merely contain the words
 // "Dialogue:"/"Format:" must not be classified as ASS.
 function hasAssTimestampedDialogue(normalized) {
-  return /^\s*Dialogue\s*:\s*(?:\d+\s*,)?\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}/im.test(
+  return /^\s*Dialogue\s*:\s*(?:(?:\d+|Marked\s*=\s*\d+)\s*,)?\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}/im.test(
     normalized
   );
 }
 
 /**
- * Detect ASS/SSA subtitle bodies from content and metadata.
+ * Detect ASS/SSA subtitle bodies from content.
  *
  * A body is ASS when it carries standard section headers on their own lines
- * together with Dialogue/Format event lines, or when URL / content-type
- * metadata says so and the body at least looks like SSA. SRT and VTT bodies
- * are always rejected, as is incidental ASS-like text inside a larger
- * non-ASS body.
+ * together with Dialogue/Format event lines, or when it contains timestamped
+ * Dialogue rows (headerless, incl. Marked=). SRT and VTT bodies are always
+ * rejected, as is incidental ASS-like text inside a larger non-ASS body.
  */
-export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
+export function isAssSubtitle(body) {
   const normalized = normalizeBody(body);
   if (!normalized.trim()) {
     return false;
   }
-  const fromMetadata =
-    /\.(ass|ssa)(\?|#|$)/i.test(String(sourceUrl || "")) ||
-    ASS_CONTENT_TYPES.some((type) =>
-      String(contentType || "")
-        .toLowerCase()
-        .includes(type)
-    );
   if (looksLikeSrtOrVtt(normalized)) {
     return false;
   }
