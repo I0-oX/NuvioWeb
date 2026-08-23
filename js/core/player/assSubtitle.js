@@ -67,11 +67,14 @@ export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
         .toLowerCase()
         .includes(type)
     );
-  if (fromMetadata) {
-    return true;
-  }
+  // Prefer an unambiguous body signature over a stale or incorrect URL/MIME
+  // hint. This matches Android's body-first sniffing and keeps a VTT/SRT
+  // response usable even when an addon labels the download as `.ass`.
   if (looksLikeSrtOrVtt(normalized)) {
     return false;
+  }
+  if (fromMetadata) {
+    return true;
   }
   if (hasAssSectionHeaders(normalized) && hasAssDialogueEvents(normalized)) {
     return true;
@@ -80,6 +83,41 @@ export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
   // Require actual ASS timing on headerless bodies so non-ASS text that merely
   // mentions "Dialogue:" is not routed away from the plain-text path.
   return hasAssTimestampedDialogue(normalized);
+}
+
+const DEFAULT_ASS_DIALOGUE_FORMAT = [
+  "layer",
+  "start",
+  "end",
+  "style",
+  "name",
+  "marginl",
+  "marginr",
+  "marginv",
+  "effect",
+  "text"
+];
+
+function isAssEventFormat(fields) {
+  return fields.includes("start") && fields.includes("end") && fields.includes("text");
+}
+
+function inferHeaderlessAssFormat(rest) {
+  const fields = String(rest || "").split(",");
+  if (
+    Number.isFinite(parseAssTimestamp(fields[0])) &&
+    Number.isFinite(parseAssTimestamp(fields[1]))
+  ) {
+    return ["start", "end", "text"];
+  }
+  if (
+    /^(?:\d+|Marked\s*=\s*\d+)$/i.test(String(fields[0] || "").trim()) &&
+    Number.isFinite(parseAssTimestamp(fields[1])) &&
+    Number.isFinite(parseAssTimestamp(fields[2]))
+  ) {
+    return DEFAULT_ASS_DIALOGUE_FORMAT;
+  }
+  return null;
 }
 
 function parseAssTimestamp(value) {
@@ -397,16 +435,25 @@ export function convertAssDialogueToVttCues(body) {
     const trimmed = line.trim();
     if (/^Format\s*:/i.test(trimmed)) {
       const section = trimmed.slice(trimmed.indexOf(":") + 1);
-      formatFields = section.split(",").map((field) => field.trim().toLowerCase());
+      const candidateFields = section.split(",").map((field) => field.trim().toLowerCase());
+      // ASS style sections also contain a `Format:` line. Keep only an event
+      // format here so a headerless body can still be inferred safely.
+      if (isAssEventFormat(candidateFields)) {
+        formatFields = candidateFields;
+      }
       return;
     }
-    if (!/^Dialogue\s*:/i.test(trimmed) || !formatFields) {
+    if (!/^Dialogue\s*:/i.test(trimmed)) {
       return;
     }
     let rest = trimmed.slice(trimmed.indexOf(":") + 1);
+    const eventFormatFields = formatFields || inferHeaderlessAssFormat(rest);
+    if (!eventFormatFields) {
+      return;
+    }
     const values = [];
-    const textIndex = formatFields.indexOf("text");
-    const headCount = textIndex >= 0 ? textIndex : formatFields.length;
+    const textIndex = eventFormatFields.indexOf("text");
+    const headCount = textIndex >= 0 ? textIndex : eventFormatFields.length;
     for (let index = 0; index < headCount; index += 1) {
       const commaIndex = rest.indexOf(",");
       if (commaIndex < 0) {
@@ -417,7 +464,7 @@ export function convertAssDialogueToVttCues(body) {
     }
     values.push(rest);
     const record = {};
-    formatFields.forEach((field, index) => {
+    eventFormatFields.forEach((field, index) => {
       record[field] = values[index];
     });
     const start = parseAssTimestamp(record.start);
