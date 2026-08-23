@@ -13999,11 +13999,17 @@ export const PlayerScreen = {
 
   isAvPlaySubtitleControlPayload(value = "") {
     const text = String(value || "").trim();
-    if (!text || /[.!?\u00C0-\u024F]/.test(text)) {
+    if (!text) {
       return false;
     }
+    // Check the control prefix before the punctuation heuristic: full SSA
+    // events contain "." inside their H:MM:SS.cc timestamps, which would
+    // otherwise short-circuit to false and let raw fields reach the overlay.
     if (/^\s*(?:Dialogue|Comment)\s*:/i.test(text)) {
       return true;
+    }
+    if (/[.!?\u00C0-\u024F]/.test(text)) {
+      return false;
     }
     // AVPlay may expose SSA fields as a CSV row instead of its final text.
     // Require the numeric prefix and at least the structural field count so

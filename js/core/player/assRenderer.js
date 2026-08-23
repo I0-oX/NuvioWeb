@@ -39,7 +39,9 @@ function debugAssRender(stage, details = {}) {
 function hasRawAssControlText(container) {
   const text = String(container?.textContent || "");
   return (
-    /(?:^|\n)\s*(?:Dialogue|Comment)\s*:/i.test(text) ||
+    // Require the SSA field shape so legitimate cue text that merely starts
+    // with "Dialogue:"/"Comment:" does not tear down the whole renderer.
+    /(?:^|\n)\s*(?:Dialogue|Comment)\s*:\s*\d+\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]/i.test(text) ||
     /(?:^|\n)\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(text)
   );
 }
