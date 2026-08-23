@@ -1,5 +1,7 @@
 import { getSubtitleAssAlignment, getSubtitleAssAlignmentSettings } from "./subtitleCueLayout.js";
 
+const ASS_CONTENT_TYPES = ["text/x-ssa", "application/x-ssa", "text/x-ass", "application/x-ass"];
+
 const ASS_SECTION_HEADERS = [
   "[Script Info]",
   "[V4+ Styles]",
@@ -45,17 +47,28 @@ function hasAssTimestampedDialogue(normalized) {
 }
 
 /**
- * Detect ASS/SSA subtitle bodies from content.
+ * Detect ASS/SSA subtitle bodies from content and metadata.
  *
  * A body is ASS when it carries standard section headers on their own lines
- * together with Dialogue/Format event lines, or when it contains timestamped
+ * together with Dialogue/Format event lines, when URL/content-type
+ * indicates ASS (.ass/.ssa, text/x-ass), or when it contains timestamped
  * Dialogue rows (headerless, incl. Marked=). SRT and VTT bodies are always
  * rejected, as is incidental ASS-like text inside a larger non-ASS body.
  */
-export function isAssSubtitle(body) {
+export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
   const normalized = normalizeBody(body);
   if (!normalized.trim()) {
     return false;
+  }
+  const fromMetadata =
+    /\.(ass|ssa)(\?|#|$)/i.test(String(sourceUrl || "")) ||
+    ASS_CONTENT_TYPES.some((type) =>
+      String(contentType || "")
+        .toLowerCase()
+        .includes(type)
+    );
+  if (fromMetadata) {
+    return true;
   }
   if (looksLikeSrtOrVtt(normalized)) {
     return false;
