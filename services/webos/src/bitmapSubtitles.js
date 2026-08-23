@@ -998,8 +998,13 @@ function isAssTimestamp(value) {
 function isRawAssControlPayload(value) {
   var text = String(value || "").trim();
   if (!text) return false;
-  if (/^\s*(?:Dialogue|Comment)\s*:/i.test(text)) return true;
-  return /^\s*\d+\s*,\s*\d+\s*,\s*[\w/.-]+\s*,/.test(text) && text.split(",").length >= 6;
+  var payload = text.replace(/^\s*(?:Dialogue|Comment)\s*:\s*/i, "");
+  // Timed Dialogue/Comment rows are valid ASS subtitle events and must be
+  // parsed below; only positional AVPlay control CSV is rejected here.
+  return (
+    /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(payload) &&
+    payload.split(",").length >= 6
+  );
 }
 
 function parseAssTimestampMs(value) {
@@ -1057,12 +1062,13 @@ function normalizeTextSubtitlePayload(track, payload) {
   var text = decodeTextSubtitlePayload(payload);
   if (!text) return "";
 
-  var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
-  // ASS-specific heuristic: never apply it to plain SRT/WebVTT/UTF8 text,
-  // where "Comment: ..." or numeric CSV can be legitimate display text.
-  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(assEvent)) {
+  // Inspect the original payload before removing Dialogue:/Comment: so
+  // structured ASS control rows are filtered without dropping plain cue text.
+  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(text)) {
     return "";
   }
+  var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
+  // ASS-specific parsing follows the original-payload control check above.
   var fields = assEvent.split(",");
 
   var hasLayeredAssTiming =

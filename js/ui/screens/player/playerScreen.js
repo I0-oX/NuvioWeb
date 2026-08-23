@@ -14002,21 +14002,25 @@ export const PlayerScreen = {
     if (!text) {
       return false;
     }
-    // Check the control prefix before the punctuation heuristic: full SSA
-    // events contain "." inside their H:MM:SS.cc timestamps, which would
-    // otherwise short-circuit to false and let raw fields reach the overlay.
-    if (/^\s*(?:Dialogue|Comment)\s*:/i.test(text)) {
+    // AVPlay may expose the complete SSA event or its positional CSV fields.
+    // Strip only the control prefix for structural validation; plain cue text
+    // such as "Dialogue: hello" must remain renderable.
+    const payload = text.replace(/^\s*(?:Dialogue|Comment)\s*:\s*/i, "");
+    const hasAssTiming =
+      /^(?:(?:\d+|Marked\s*=\s*\d+)\s*,\s*)?\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,/i.test(
+        payload
+      );
+    if (hasAssTiming) {
       return true;
     }
     if (/[.!?\u00C0-\u024F]/.test(text)) {
       return false;
     }
-    // AVPlay may expose SSA fields as a CSV row instead of its final text.
-    // Require the numeric prefix and at least the structural field count so
-    // ordinary comma-containing dialogue remains valid.
+    // Require the numeric prefix and a known AVPlay style token so ordinary
+    // comma-containing dialogue remains valid.
     return (
-      /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(text) &&
-      text.split(",").length >= 6
+      /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(payload) &&
+      payload.split(",").length >= 6
     );
   },
 
