@@ -37,6 +37,10 @@ function hasAssDialogueEvents(normalized) {
   return /^\s*Dialogue\s*:/im.test(normalized) && /^\s*Format\s*:/im.test(normalized);
 }
 
+function hasAssDialoguePayload(normalized) {
+  return /^\s*Dialogue\s*:/im.test(normalized);
+}
+
 /**
  * Detect ASS/SSA subtitle bodies from content and metadata.
  *
@@ -64,7 +68,8 @@ export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
   if (hasAssSectionHeaders(normalized) && hasAssDialogueEvents(normalized)) {
     return true;
   }
-  return fromMetadata && hasAssDialogueEvents(normalized);
+  // Some proxy/AVPlay paths strip ASS section headers but preserve event rows.
+  return hasAssDialogueEvents(normalized) || (fromMetadata && hasAssDialoguePayload(normalized));
 }
 
 function parseAssTimestamp(value) {

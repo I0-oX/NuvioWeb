@@ -11658,6 +11658,34 @@ html.legacy-webos .debug-console-log-frame {
 .player-ass-subtitles.hidden {
   display: none;
 }
+.player-ass-subtitles .ASS-box {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: Arial, sans-serif;
+}
+
+.player-ass-subtitles .ASS-dialogue {
+  position: absolute;
+  z-index: 0;
+  display: block;
+  box-sizing: content-box;
+  width: max-content;
+  font-size: 0;
+  transform: translate(calc(var(--ass-align-h) * -1), calc(var(--ass-align-v) * -1));
+}
+
+.player-ass-subtitles .ASS-dialogue span {
+  display: inline-block;
+}
+
+.player-ass-subtitles .ASS-dialogue [data-text] {
+  display: inline-block;
+  color: var(--ass-fill-color);
+  font-size: calc(var(--ass-scale) * var(--ass-real-fs) * 1px);
+  line-height: calc(var(--ass-scale) * var(--ass-tag-fs) * 1px);
+  letter-spacing: calc(var(--ass-scale) * var(--ass-tag-fsp) * 1px);
+}
 
 .player-html-subtitle-cue {
   position: absolute;

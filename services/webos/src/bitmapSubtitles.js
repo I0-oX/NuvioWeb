@@ -995,6 +995,13 @@ function isAssTimestamp(value) {
   return /^\s*\d+:\d{1,2}:\d{1,2}[.:]\d{1,3}\s*$/.test(String(value || ""));
 }
 
+function isRawAssControlPayload(value) {
+  var text = String(value || "").trim();
+  if (!text) return false;
+  if (/^\s*(?:Dialogue|Comment)\s*:/i.test(text)) return true;
+  return /^\s*\d+\s*,\s*\d+\s*,\s*[\w/.-]+\s*,/.test(text) && text.split(",").length >= 6;
+}
+
 function parseAssTimestampMs(value) {
   var match = String(value || "")
     .trim()
@@ -1051,7 +1058,11 @@ function normalizeTextSubtitlePayload(track, payload) {
   if (!text) return "";
 
   var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
+  if (isRawAssControlPayload(assEvent)) {
+    return "";
+  }
   var fields = assEvent.split(",");
+
   var hasLayeredAssTiming =
     fields.length >= 3 &&
     /^(?:marked\s*=\s*)?-?\d+$/i.test(String(fields[0] || "").trim()) &&
@@ -1060,11 +1071,13 @@ function normalizeTextSubtitlePayload(track, payload) {
   var hasShortAssTiming =
     fields.length >= 3 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
   if (hasLayeredAssTiming) {
-    text = textAfterCommaCount(assEvent, 9) || assEvent;
+    text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
-    text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || assEvent;
-  } else if (isAssTextSubtitleTrack(track)) {
+    text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || "";
+  } else if (isAssTextSubtitleTrack(track) && !isRawAssControlPayload(assEvent)) {
     text = assEvent;
+  } else if (isAssTextSubtitleTrack(track)) {
+    return "";
   }
   return text.replace(/\n{2,}/g, "\n").trim();
 }
@@ -1208,7 +1221,7 @@ function getAssDialogueText(track, frame) {
 
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
-  if (!text) return "";
+  if (!text || isRawAssControlPayload(text)) return "";
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
