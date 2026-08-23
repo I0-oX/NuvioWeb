@@ -37,10 +37,6 @@ function hasAssDialogueEvents(normalized) {
   return /^\s*Dialogue\s*:/im.test(normalized) && /^\s*Format\s*:/im.test(normalized);
 }
 
-function hasAssDialoguePayload(normalized) {
-  return /^\s*Dialogue\s*:/im.test(normalized);
-}
-
 // Headerless ASS still carries real event rows: an optional Layer followed by
 // Start and End timestamps. Prose transcripts that merely contain the words
 // "Dialogue:"/"Format:" must not be classified as ASS.
@@ -80,9 +76,7 @@ export function isAssSubtitle(body, { sourceUrl = "", contentType = "" } = {}) {
   // Some proxy/AVPlay paths strip ASS section headers but preserve event rows.
   // Require actual ASS timing on headerless bodies so non-ASS text that merely
   // mentions "Dialogue:" is not routed away from the plain-text path.
-  return (
-    hasAssTimestampedDialogue(normalized) || (fromMetadata && hasAssDialoguePayload(normalized))
-  );
+  return hasAssTimestampedDialogue(normalized);
 }
 
 function parseAssTimestamp(value) {

@@ -14014,7 +14014,10 @@ export const PlayerScreen = {
     // AVPlay may expose SSA fields as a CSV row instead of its final text.
     // Require the numeric prefix and at least the structural field count so
     // ordinary comma-containing dialogue remains valid.
-    return /^\s*\d+\s*,\s*\d+\s*,\s*[\w/.-]+\s*,/.test(text) && text.split(",").length >= 6;
+    return (
+      /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(text) &&
+      text.split(",").length >= 6
+    );
   },
 
   renderAvPlaySubtitleChange(detail = {}) {
