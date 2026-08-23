@@ -187,12 +187,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Package signed public-store Tizen WGT
+      # The GitHub release WGT is the installer input, not the Seller Office
+      # package. NuvioWebTVInstaller signs it locally with the certificate
+      # associated with the target TV DUID before vd_appinstall.
+      - name: Package unsigned Tizen WGT for WebTV Installer
         env:
           NUVIO_REQUIRE_LOCAL_PROPERTIES: "1"
-          TIZEN_CLI: ${{ vars.TIZEN_CLI || 'tizen' }}
-          TIZEN_SECURITY_PROFILE: ${{ secrets.TIZEN_SECURITY_PROFILE }}
-        run: npm run package:tizen:store
+          TIZEN_INCLUDE_ENGINEFS_SERVICE: "1"
+        run: npm run package:tizen
 
       - name: Normalize Tizen package metadata
         id: package

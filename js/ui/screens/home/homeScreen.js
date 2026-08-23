@@ -6409,6 +6409,34 @@ export const HomeScreen = {
     }
   },
 
+  prefetchFocusedPosterTrailer(node) {
+    if (!this.isModernPosterNode(node) || this.isCollectionFolderNode(node)) {
+      return Promise.resolve(null);
+    }
+    const flowKey = this.getFocusedPosterFlowKey(node);
+    if (!flowKey) {
+      return Promise.resolve(null);
+    }
+    this.focusedPosterTrailerSourcePromises ||= new Map();
+    const cached = this.focusedPosterTrailerSourcePromises.get(flowKey);
+    if (cached) {
+      return cached;
+    }
+    const sourceItem = this.getNodeHeroSource(node);
+    const promise = this.getTrailerSourceForItem(sourceItem).catch((error) => {
+      console.warn("Home trailer preview prefetch failed", error);
+      return null;
+    });
+    this.focusedPosterTrailerSourcePromises.set(flowKey, promise);
+    // Keep this session cache bounded while retaining the Android-style
+    // focus prefetch for recently visited cards.
+    while (this.focusedPosterTrailerSourcePromises.size > 32) {
+      const oldestKey = this.focusedPosterTrailerSourcePromises.keys().next().value;
+      this.focusedPosterTrailerSourcePromises.delete(oldestKey);
+    }
+    return promise;
+  },
+
   async activateFocusedPosterFlow(node, flowToken = Number(this.focusedPosterFlowToken || 0)) {
     if (!this.isModernPosterNode(node) || !node.classList.contains("focused")) {
       return;
@@ -6452,8 +6480,7 @@ export const HomeScreen = {
       }
     }
 
-    const sourceItem = this.getNodeHeroSource(node);
-    const baseSource = await this.getTrailerSourceForItem(sourceItem);
+    const baseSource = await this.prefetchFocusedPosterTrailer(node);
     if (Number(this.focusedPosterFlowToken || 0) !== Number(flowToken || 0)) {
       return;
     }
@@ -6501,6 +6528,10 @@ export const HomeScreen = {
     if (this.focusedPosterTimer) {
       clearTimeout(this.focusedPosterTimer);
       this.focusedPosterTimer = null;
+    }
+    if (this.focusedPosterTrailerPrefetchTimer) {
+      clearTimeout(this.focusedPosterTrailerPrefetchTimer);
+      this.focusedPosterTrailerPrefetchTimer = null;
     }
     this.focusedPosterFlowToken = Number(this.focusedPosterFlowToken || 0) + 1;
   },
@@ -6700,6 +6731,20 @@ export const HomeScreen = {
       activated: Boolean(canReuseExistingState && existingState.activated),
       token: flowToken
     };
+    if (shouldPreviewTrailer) {
+      this.focusedPosterTrailerPrefetchTimer = setTimeout(() => {
+        this.focusedPosterTrailerPrefetchTimer = null;
+        if (
+          Number(this.focusedPosterFlowToken || 0) !== flowToken ||
+          this.getCurrentFocusedNode() !== node ||
+          !node?.isConnected ||
+          !node.classList.contains("focused")
+        ) {
+          return;
+        }
+        this.prefetchFocusedPosterTrailer(node);
+      }, 150);
+    }
     if (
       canReuseExistingState &&
       existingState.activated &&

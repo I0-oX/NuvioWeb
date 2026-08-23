@@ -101,30 +101,22 @@ ${engineFsService}  <tizen:profile name="tv-samsung"/>
 }
 
 /*
- * Keep the public-store profile free of the Samsung-partner-only service.
- * The service metadata is intentionally supplied by the partner integration,
- * rather than guessed here: Samsung validates those values during review.
+ * EngineFS is part of the supported TV application, including the Store
+ * package. Do not silently publish a Store build without the local service:
+ * that would make P2P disappear from otherwise capable Tizen TVs.
+ *
+ * Optional service metadata is still accepted for a Seller Office request,
+ * but it is never invented or required by this package script.
  */
-function validatePartnerServiceOptions({ includeEngineFsService, storeBuild, serviceMetadataXml }) {
-  if (!storeBuild || !includeEngineFsService) {
-    return;
-  }
-
-  if (!isTruthy(process.env.TIZEN_PARTNER_SERVICE_APPROVED)) {
+function validateStoreServiceOptions({ includeEngineFsService, storeBuild, serviceMetadataXml }) {
+  if (storeBuild && !includeEngineFsService) {
     throw new Error(
-      "Tizen Store packaging cannot include EngineFS without TIZEN_PARTNER_SERVICE_APPROVED=true. " +
-        "Samsung restricts tizen:service to approved TV partners."
+      "Tizen Store packaging must include the local EngineFS service so supported TVs retain torrent/P2P playback. " +
+        "Remove --no-enginefs-service and do not set TIZEN_INCLUDE_ENGINEFS_SERVICE=false."
     );
   }
 
-  if (!serviceMetadataXml) {
-    throw new Error(
-      "Tizen Store partner-service packaging requires TIZEN_SERVICE_METADATA_XML with the " +
-        "Samsung-approved tizen:metadata element."
-    );
-  }
-
-  if (!/^<tizen:metadata\b[\s\S]*\/>$/.test(serviceMetadataXml)) {
+  if (serviceMetadataXml && !/^<tizen:metadata\b[\s\S]*\/>$/.test(serviceMetadataXml)) {
     throw new Error(
       "TIZEN_SERVICE_METADATA_XML must contain one self-closing <tizen:metadata .../> element."
     );
@@ -324,7 +316,7 @@ function parseArgs(argv) {
     envSourcePath: process.env.TIZEN_ENV_SOURCE || "",
     storeBuild,
     includeEngineFsService:
-      configuredIncludeService == null ? !storeBuild : isTruthy(configuredIncludeService),
+      configuredIncludeService == null ? true : isTruthy(configuredIncludeService),
     signingProfile: process.env.TIZEN_SECURITY_PROFILE || "",
     tizenCli: process.env.TIZEN_CLI || "tizen",
     serviceMetadataXml: String(process.env.TIZEN_SERVICE_METADATA_XML || "").trim()
@@ -346,9 +338,6 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === "--store") {
       options.storeBuild = true;
-      if (configuredIncludeService == null) {
-        options.includeEngineFsService = false;
-      }
     } else if (arg === "--include-enginefs-service") {
       options.includeEngineFsService = true;
     } else if (arg === "--no-enginefs-service") {
@@ -378,7 +367,7 @@ function parseArgs(argv) {
     );
   }
 
-  validatePartnerServiceOptions(options);
+  validateStoreServiceOptions(options);
 
   return options;
 }
@@ -430,7 +419,7 @@ async function findWgtFiles(directory) {
     .map((entry) => path.join(directory, entry.name));
 }
 
-async function assertSignedTizenPackage(outputPath, { publicStoreBuild }) {
+async function assertSignedTizenPackage(outputPath, { requireEngineFsService = false } = {}) {
   const zip = await JSZip.loadAsync(await readFile(outputPath));
   const requiredFiles = ["config.xml", "author-signature.xml", "signature1.xml"];
   for (const fileName of requiredFiles) {
@@ -451,15 +440,28 @@ async function assertSignedTizenPackage(outputPath, { publicStoreBuild }) {
       'Tizen WGT contains on-boot="true", which is not allowed for Store submission.'
     );
   }
-  if (
-    publicStoreBuild &&
-    /<tizen:service\b|http:\/\/tizen\.org\/feature\/web\.service|http:\/\/tizen\.org\/privilege\/application\.launch/i.test(
-      configXml
-    )
-  ) {
-    throw new Error(
-      "Public Tizen Store WGT unexpectedly contains the partner-only EngineFS service or its privileges."
-    );
+
+  if (requireEngineFsService) {
+    const requiredServiceEntries = [
+      tizenEngineFsServiceRelativePath,
+      `${tizenEngineFsRuntimeDirRelativePath}/media-http.cjs`
+    ];
+    const missingServiceEntry = requiredServiceEntries.find((fileName) => !zip.file(fileName));
+    if (missingServiceEntry) {
+      throw new Error(
+        `Store Tizen WGT is missing the EngineFS service file ${missingServiceEntry}.`
+      );
+    }
+    const missingManifestEntry = [
+      /<feature\s+name=["']http:\/\/tizen\.org\/feature\/web\.service["']/i,
+      /<tizen:privilege\s+name=["']http:\/\/tizen\.org\/privilege\/application\.launch["']/i,
+      /<tizen:service\b[\s\S]*?<tizen:content\s+src=["']services\/tizen\/enginefs-service\.js["']/i
+    ].find((pattern) => !pattern.test(configXml));
+    if (missingManifestEntry) {
+      throw new Error(
+        "Store Tizen WGT is missing the manifest entries required for the local EngineFS service."
+      );
+    }
   }
 }
 
@@ -467,7 +469,7 @@ async function packageWithOfficialTizenCli({
   outputPath,
   signingProfile,
   tizenCli,
-  publicStoreBuild
+  requireEngineFsService
 }) {
   await rm(signedOutputDir, { recursive: true, force: true });
   await mkdir(signedOutputDir, { recursive: true });
@@ -487,7 +489,7 @@ async function packageWithOfficialTizenCli({
 
   const [signedPackagePath] = candidates;
   await cp(signedPackagePath, outputPath);
-  await assertSignedTizenPackage(outputPath, { publicStoreBuild });
+  await assertSignedTizenPackage(outputPath, { requireEngineFsService });
 }
 
 async function packageTizen() {
@@ -517,7 +519,7 @@ async function packageTizen() {
       outputPath,
       signingProfile: options.signingProfile,
       tizenCli: options.tizenCli,
-      publicStoreBuild: !options.includeEngineFsService
+      requireEngineFsService: options.storeBuild
     });
   } else {
     const zip = new JSZip();

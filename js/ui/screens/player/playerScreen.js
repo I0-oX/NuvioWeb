@@ -671,6 +671,20 @@ function normalizeTrackCodecText(value) {
   return cleanDisplayText(value).toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function isAssSubtitleCodec(value) {
+  const text = cleanDisplayText(value);
+  if (!text) {
+    return false;
+  }
+  // Matroska codec id (S_TEXT/ASS|SSA), MIME aliases, and short codec names
+  // (ass|ssa) reported by ffprobe / the companion tracks endpoint.
+  return (
+    /^S_TEXT\/(?:ASS|SSA)$/i.test(text) ||
+    /^(?:text\/x-ass|application\/x-ass|text\/x-ssa|application\/x-ssa)$/i.test(text) ||
+    /^(?:ass|ssa|advanced substation alpha|substation alpha)$/i.test(text)
+  );
+}
+
 function isUnsupportedEmbeddedSubtitleTrack(track = {}) {
   const codecText = normalizeTrackCodecText(
     track?.codec || track?.subtitleCodec || track?.codec_name || track?.format || ""
@@ -820,6 +834,24 @@ function getTrackLanguageValue(track = {}) {
   return knownLanguage || candidates.find((value) => value) || "";
 }
 
+function isUnknownAudioTrackLanguageValue(value) {
+  const normalized = cleanDisplayText(value).toLowerCase().replace(/_/g, "-");
+  if (!normalized) {
+    return false;
+  }
+  const normalizedCode = normalizeTrackLanguageCode(normalized);
+  const baseCode = String(normalizedCode || "").split("-")[0];
+  return (
+    ["und", "unk", "zxx"].includes(baseCode) ||
+    ["unknown", "unknown language", "undetermined", "undefined"].includes(normalized)
+  );
+}
+
+function getUsableAudioTrackLanguageValue(track = {}) {
+  const value = getTrackLanguageValue(track);
+  return isUnknownAudioTrackLanguageValue(value) ? "" : value;
+}
+
 function inferAudioTrackDisplayLanguageCode(track = {}, entry = {}) {
   const candidates = [track?.name, track?.label, track?.title, entry?.label];
   for (const candidate of candidates) {
@@ -832,7 +864,7 @@ function inferAudioTrackDisplayLanguageCode(track = {}, entry = {}) {
 }
 
 function inferAudioTrackLanguageKey(track = {}, entry = {}) {
-  const explicit = detectTrackLanguageVariant(track, getTrackLanguageValue(track));
+  const explicit = detectTrackLanguageVariant(track, getUsableAudioTrackLanguageValue(track));
   const displayCode = inferAudioTrackDisplayLanguageCode(track, entry);
   if (
     displayCode &&
@@ -859,7 +891,7 @@ function inferAudioTrackLanguageKey(track = {}, entry = {}) {
   ];
   for (const candidate of candidates) {
     const normalizedCode = normalizeTrackLanguageCode(candidate);
-    if (normalizedCode) {
+    if (normalizedCode && !isUnknownAudioTrackLanguageValue(normalizedCode)) {
       return normalizedCode;
     }
     const inferredCode = inferTrackLanguageCodeFromText(candidate);
@@ -872,7 +904,9 @@ function inferAudioTrackLanguageKey(track = {}, entry = {}) {
 
 function getAudioTrackLanguageLabel(track = {}, entry = {}) {
   const languageKey = inferAudioTrackLanguageKey(track, entry);
-  return languageKey ? getTrackLanguageLabel({ language: languageKey }) : "";
+  return languageKey && !isUnknownAudioTrackLanguageValue(languageKey)
+    ? getTrackLanguageLabel({ language: languageKey })
+    : "";
 }
 
 function getTrackLanguageLabel(track = {}) {
@@ -1242,7 +1276,7 @@ function formatAudioChannelLayout(value) {
 
 function formatAudioTrackDisplay(track = {}, index = 0) {
   const rawLabel = getMeaningfulTrackLabel(track);
-  const rawLanguage = cleanDisplayText(getTrackLanguageValue(track));
+  const rawLanguage = cleanDisplayText(getUsableAudioTrackLanguageValue(track));
   const languageLabel = capitalizeDisplayLabel(getAudioTrackLanguageLabel(track));
   const rawLanguageLabel = capitalizeDisplayLabel(rawLanguage);
   const authoritativeCodecValue = getAuthoritativeAudioCodecValue(track);
@@ -4295,7 +4329,11 @@ export const PlayerScreen = {
     }
 
     if (Environment.isTizen()) {
-      return false;
+      const usingAvPlay =
+        typeof PlayerController.isUsingAvPlay === "function"
+          ? PlayerController.isUsingAvPlay()
+          : false;
+      return Boolean(usingAvPlay);
     }
 
     return typeof PlayerController.isLikelyDirectFileUrl === "function"
@@ -4326,24 +4364,41 @@ export const PlayerScreen = {
       return false;
     }
 
+    // On Tizen these tracks are metadata for the AVPlay entries above, not a
+    // second selection path. Keep native AVPlay as the only selectable source.
+    if (Environment.isTizen()) {
+      return false;
+    }
+
     return Environment.isWebOS() || this.getTextTracks().length <= 0;
   },
 
   normalizeEmbeddedSubtitleTracks(rawTracks = []) {
+    const isTizenAvPlayMetadata = Environment.isTizen();
     let nativeTrackIndex = 0;
     return rawTracks
       .filter((track) => {
         const type = String(track?.type || track?.track || track?.codecType || "").toLowerCase();
         return type === "text" || type === "subtitle";
       })
-      .filter((track) =>
-        getEmbeddedBitmapSubtitleFormat(track)
+      .filter((track) => {
+        // Tizen uses this list only to enrich AVPlay's native entries. Keep
+        // every text stream so the metadata ordinal stays aligned with the
+        // TEXT track index returned by getTotalTrackInfo().
+        if (isTizenAvPlayMetadata) {
+          return true;
+        }
+        return getEmbeddedBitmapSubtitleFormat(track)
           ? canUseWebOsBitmapSubtitles()
-          : !isUnsupportedEmbeddedSubtitleTrack(track)
-      )
+          : !isUnsupportedEmbeddedSubtitleTrack(track);
+      })
       .map((track, index) => {
         const bitmapSubtitleFormat = getEmbeddedBitmapSubtitleFormat(track);
         const bitmapSubtitle = Boolean(bitmapSubtitleFormat);
+        const currentNativeTrackIndex = nativeTrackIndex;
+        if (isTizenAvPlayMetadata || !bitmapSubtitle) {
+          nativeTrackIndex += 1;
+        }
         const sourceTrackId = Number(track?.id);
         const rawLanguage = getTrackLanguageValue(track);
         const normalizedLanguage = normalizeTrackLanguageCode(rawLanguage);
@@ -4359,7 +4414,11 @@ export const PlayerScreen = {
           id: `embedded-subtitle-${index}`,
           embeddedTrackIndex: index,
           sourceTrackId: Number.isFinite(sourceTrackId) ? sourceTrackId : -1,
-          nativeTrackIndex: bitmapSubtitle ? -1 : nativeTrackIndex++,
+          nativeTrackIndex: isTizenAvPlayMetadata
+            ? currentNativeTrackIndex
+            : bitmapSubtitle
+              ? -1
+              : currentNativeTrackIndex,
           bitmapSubtitle,
           bitmapSubtitleFormat,
           label: getMeaningfulTrackLabel(track) || fallbackLabel,
@@ -4374,7 +4433,13 @@ export const PlayerScreen = {
                 .trim()
                 .toUpperCase(),
           forced: isForcedSubtitleTrack(track),
-          codec: cleanDisplayText(track?.codec || track?.subtitleCodec || track?.codec_name),
+          codec: cleanDisplayText(
+            track?.codec ||
+              track?.subtitleCodec ||
+              track?.codec_name ||
+              track?.codecId ||
+              track?.codec_id
+          ),
           format: cleanDisplayText(track?.format || track?.format_name),
           raw: track
         };
@@ -4396,7 +4461,8 @@ export const PlayerScreen = {
 
   normalizeEmbeddedAudioTracks(rawTracks = []) {
     const audioTracks = rawTracks.filter(
-      (track) => String(track?.type || "").toLowerCase() === "audio"
+      (track) =>
+        String(track?.type || track?.track || track?.codecType || "").toLowerCase() === "audio"
     );
     const supportStates = audioTracks.map((track) => getAudioTrackSupportState(track));
     const nativeTrackIndexes = mapAudioTrackNativeIndexes(
@@ -4406,7 +4472,7 @@ export const PlayerScreen = {
     return audioTracks.map((track, index) => {
       const sourceTrackId = Number(track?.id);
       const support = supportStates[index];
-      const rawLanguage = getTrackLanguageValue(track);
+      const rawLanguage = getUsableAudioTrackLanguageValue(track);
       const inferredLanguage = inferAudioTrackLanguageKey(track);
       return {
         id: `embedded-audio-${index}`,
@@ -12593,31 +12659,56 @@ export const PlayerScreen = {
     if (!embeddedTrack) {
       return track;
     }
-    const avplayLanguage = getTrackLanguageValue(track);
-    const embeddedLanguage = getTrackLanguageValue(embeddedTrack);
+    const rawAvplayLanguage = getTrackLanguageValue(track);
+    const rawEmbeddedLanguage = getTrackLanguageValue(embeddedTrack);
+    const avplayLanguageCode =
+      normalizeTrackLanguageCode(rawAvplayLanguage) ||
+      inferTrackLanguageCodeFromText(rawAvplayLanguage);
+    const embeddedLanguageCode =
+      normalizeTrackLanguageCode(rawEmbeddedLanguage) ||
+      inferTrackLanguageCodeFromText(rawEmbeddedLanguage);
+    const avplayLanguage = avplayLanguageCode ? rawAvplayLanguage : "";
+    const embeddedLanguage = embeddedLanguageCode ? rawEmbeddedLanguage : "";
+    const languageMatches =
+      !avplayLanguageCode || !embeddedLanguageCode || avplayLanguageCode === embeddedLanguageCode;
+    const avplayLabel = cleanDisplayText(track?.label || track?.name || track?.title);
+    const embeddedLabel = cleanDisplayText(
+      embeddedTrack?.label || embeddedTrack?.name || embeddedTrack?.title
+    );
+    const meaningfulEmbeddedLabel = isGenericSubtitleTrackLabel(embeddedLabel) ? "" : embeddedLabel;
+    const useEmbeddedLabel = Boolean(
+      meaningfulEmbeddedLabel &&
+      (!avplayLabel || isGenericSubtitleTrackLabel(avplayLabel)) &&
+      languageMatches
+    );
+    const displayLabel =
+      (useEmbeddedLabel ? meaningfulEmbeddedLabel : avplayLabel || meaningfulEmbeddedLabel) ||
+      subtitleLabel(index);
+    const selectedLanguage = avplayLanguage || embeddedLanguage;
     return {
       ...track,
-      label:
-        cleanDisplayText(track?.label) ||
-        cleanDisplayText(embeddedTrack.label) ||
-        subtitleLabel(index),
+      label: displayLabel,
+      name:
+        cleanDisplayText(track?.name) && !isGenericSubtitleTrackLabel(track.name)
+          ? track.name
+          : displayLabel,
       // AVPlay's extra_info.track_lang is the authoritative Samsung language.
       // Local /tracks metadata only fills gaps and must not replace it with
       // placeholders such as "unknown" or "und".
-      language: avplayLanguage || embeddedLanguage,
+      language: selectedLanguage,
+      lang: track?.lang || selectedLanguage,
       forced: isForcedSubtitleTrack(track) || isForcedSubtitleTrack(embeddedTrack),
-      secondary:
-        embeddedTrack.secondary || String(avplayLanguage || embeddedLanguage || "").toUpperCase()
+      secondary: embeddedTrack.secondary || String(selectedLanguage || "").toUpperCase()
     };
   },
 
   mergeEmbeddedAudioTrackMetadata(track, index) {
     let embeddedTrack =
       this.getEmbeddedAudioTrackByNativeIndex(index) || this.getEmbeddedAudioTrack(index);
-    const explicitLanguage = normalizeTrackLanguageCode(track?.language || track?.lang || "");
-    let embeddedLanguage = normalizeTrackLanguageCode(
-      embeddedTrack?.language || embeddedTrack?.lang || ""
-    );
+    const trackLanguage = getUsableAudioTrackLanguageValue(track);
+    let embeddedTrackLanguage = getUsableAudioTrackLanguageValue(embeddedTrack);
+    const explicitLanguage = normalizeTrackLanguageCode(trackLanguage);
+    let embeddedLanguage = normalizeTrackLanguageCode(embeddedTrackLanguage);
     if (explicitLanguage && embeddedLanguage && explicitLanguage !== embeddedLanguage) {
       const languageMatchedTrack = (this.embeddedAudioTracks || []).find(
         (candidate) =>
@@ -12626,9 +12717,8 @@ export const PlayerScreen = {
       );
       if (languageMatchedTrack) {
         embeddedTrack = languageMatchedTrack;
-        embeddedLanguage = normalizeTrackLanguageCode(
-          embeddedTrack?.language || embeddedTrack?.lang || ""
-        );
+        embeddedTrackLanguage = getUsableAudioTrackLanguageValue(embeddedTrack);
+        embeddedLanguage = normalizeTrackLanguageCode(embeddedTrackLanguage);
       }
     }
     if (!embeddedTrack) {
@@ -12651,9 +12741,8 @@ export const PlayerScreen = {
         cleanDisplayText(track?.name || (useEmbeddedLabel ? embeddedLabel : "")) ||
         track?.name ||
         "",
-      language:
-        track?.language || track?.lang || embeddedTrack?.language || embeddedTrack?.lang || "",
-      lang: track?.lang || track?.language || embeddedTrack?.lang || embeddedTrack?.language || "",
+      language: trackLanguage || embeddedTrackLanguage,
+      lang: trackLanguage || embeddedTrackLanguage,
       codec: embeddedTrack.codec || track?.codec || track?.audioCodec || "",
       codecs: embeddedTrack.codecs || track?.codecs || "",
       audioCodec: embeddedTrack.audioCodec || track?.audioCodec || track?.codec || "",
@@ -12676,10 +12765,10 @@ export const PlayerScreen = {
       this.getEmbeddedAudioTrackByNativeIndex(
         Number.isFinite(avplayTrackIndex) ? avplayTrackIndex : index
       ) || this.getEmbeddedAudioTrack(index);
-    const explicitLanguage = normalizeTrackLanguageCode(track?.language || track?.lang || "");
-    let embeddedLanguage = normalizeTrackLanguageCode(
-      embeddedTrack?.language || embeddedTrack?.lang || ""
-    );
+    const avplayLanguage = getUsableAudioTrackLanguageValue(track);
+    let embeddedTrackLanguage = getUsableAudioTrackLanguageValue(embeddedTrack);
+    const explicitLanguage = normalizeTrackLanguageCode(avplayLanguage);
+    let embeddedLanguage = normalizeTrackLanguageCode(embeddedTrackLanguage);
     if (explicitLanguage && embeddedLanguage && explicitLanguage !== embeddedLanguage) {
       const languageMatchedTrack = (this.embeddedAudioTracks || []).find(
         (candidate) =>
@@ -12688,9 +12777,8 @@ export const PlayerScreen = {
       );
       if (languageMatchedTrack) {
         embeddedTrack = languageMatchedTrack;
-        embeddedLanguage = normalizeTrackLanguageCode(
-          embeddedTrack?.language || embeddedTrack?.lang || ""
-        );
+        embeddedTrackLanguage = getUsableAudioTrackLanguageValue(embeddedTrack);
+        embeddedLanguage = normalizeTrackLanguageCode(embeddedTrackLanguage);
       }
     }
     if (!embeddedTrack) {
@@ -12713,9 +12801,8 @@ export const PlayerScreen = {
         cleanDisplayText(track?.name || (useEmbeddedLabel ? embeddedLabel : "")) ||
         track?.name ||
         "",
-      language:
-        track?.language || track?.lang || embeddedTrack?.language || embeddedTrack?.lang || "",
-      lang: track?.lang || track?.language || embeddedTrack?.lang || embeddedTrack?.language || "",
+      language: avplayLanguage || embeddedTrackLanguage,
+      lang: avplayLanguage || embeddedTrackLanguage,
       codec: embeddedTrack.codec || track?.codec || track?.audioCodec || "",
       codecs: embeddedTrack.codecs || track?.codecs || "",
       audioCodec: embeddedTrack.audioCodec || track?.audioCodec || track?.codec || "",
@@ -12733,11 +12820,14 @@ export const PlayerScreen = {
   },
 
   mergeHlsAudioTrackMetadata(track, index) {
-    const hlsLanguage = normalizeTrackLanguageCode(getTrackLanguageValue(track));
+    const hlsTrackLanguage = getUsableAudioTrackLanguageValue(track);
+    const hlsLanguage = normalizeTrackLanguageCode(hlsTrackLanguage);
     const hlsName = cleanDisplayText(track?.name || track?.label || "");
     const manifestTrack =
       this.manifestAudioTracks.find((entry) => {
-        const manifestLanguage = normalizeTrackLanguageCode(getTrackLanguageValue(entry));
+        const manifestLanguage = normalizeTrackLanguageCode(
+          getUsableAudioTrackLanguageValue(entry)
+        );
         const manifestName = cleanDisplayText(entry?.name || entry?.label || "");
         if (hlsLanguage && manifestLanguage && hlsLanguage === manifestLanguage) {
           return true;
@@ -12759,6 +12849,7 @@ export const PlayerScreen = {
         ...getAudioTrackSupportState(track)
       };
     }
+    const manifestTrackLanguage = getUsableAudioTrackLanguageValue(manifestTrack);
     const mergedTrack = {
       ...track,
       label:
@@ -12771,8 +12862,8 @@ export const PlayerScreen = {
         track?.name ||
         track?.label ||
         "",
-      language: manifestTrack.language || track?.language || track?.lang || "",
-      lang: manifestTrack.language || track?.lang || track?.language || "",
+      language: manifestTrackLanguage || hlsTrackLanguage,
+      lang: manifestTrackLanguage || hlsTrackLanguage,
       channels: manifestTrack.channels || track?.channels || track?.channelCount || "",
       channelCount: manifestTrack.channels || track?.channelCount || track?.channels || "",
       characteristics: manifestTrack.characteristics || track?.characteristics || "",
@@ -13369,7 +13460,8 @@ export const PlayerScreen = {
         endSeconds: startSeconds + EMBEDDED_TEXT_SUBTITLE_WINDOW_SECONDS,
         includeAssBody:
           this.webOsEmbeddedTextSubtitleUsingAss ||
-          /^S_TEXT\/(?:ASS|SSA)$/i.test(String(track?.codec || ""))
+          isAssSubtitleCodec(track?.codec) ||
+          isAssSubtitleCodec(track?.codec_name)
       });
       if (
         requestToken !== this.webOsEmbeddedTextSubtitleLoadToken ||
@@ -13389,7 +13481,9 @@ export const PlayerScreen = {
         Boolean(assBody) &&
         (this.webOsEmbeddedTextSubtitleUsingAss ||
           windowData.hasAdvancedAssOverrideTags ||
-          /^S_TEXT\/(?:ASS|SSA)$/i.test(String(windowData.codecId || track?.codec || "")));
+          isAssSubtitleCodec(windowData.codecId) ||
+          isAssSubtitleCodec(track?.codec) ||
+          isAssSubtitleCodec(track?.codec_name));
       if (shouldUseAss) {
         const assResult = await this.applyAssSubtitleBody({
           body: assBody,
@@ -13433,9 +13527,16 @@ export const PlayerScreen = {
         this.destroyAssSubtitleRenderer();
         this.webOsEmbeddedTextSubtitleUsingAss = false;
       }
+      const isAssTrack =
+        isAssSubtitleCodec(windowData.codecId) ||
+        isAssSubtitleCodec(track?.codec) ||
+        isAssSubtitleCodec(track?.codec_name) ||
+        Boolean(windowData.assBody);
       const cues = this.parseSubtitleCues(windowData.body);
       const shouldUseHtml =
-        this.webOsEmbeddedTextSubtitleUsingHtml || Boolean(windowData.hasAssOverrideTags);
+        this.webOsEmbeddedTextSubtitleUsingHtml ||
+        Boolean(windowData.hasAssOverrideTags) ||
+        (isAssTrack && cues.length > 0);
       if (!shouldUseHtml || (!cues.length && !this.webOsEmbeddedTextSubtitleUsingHtml)) {
         return false;
       }
@@ -13727,10 +13828,18 @@ export const PlayerScreen = {
     canvas.classList.remove("hidden");
     canvas.setAttribute("aria-hidden", "false");
     this.bitmapSubtitleLastFrameKey = renderKey;
+    return true;
+  },
+
+  renderHtmlSubtitleOverlayCue(activeCues = []) {
+    const node = this.uiRefs?.htmlSubtitles || document.getElementById("playerHtmlSubtitles");
+    if (!node) {
+      return;
+    }
     const cueKey = activeCues
       .map(
         (cue) =>
-          `${cue.start}-${cue.end}-${cue.line ?? "default"}-${cue.position ?? ""}-${cue.align || "center"}-${cue.size || ""}-${cue.text}`
+          `${cue.start}-${cue.end}-${cue.line ?? "default"}-${cue.position ?? "default"}-${cue.align || "center"}-${cue.size ?? "default"}-${cue.text}`
       )
       .join("|");
     const hasRenderedActiveCue =
@@ -13744,136 +13853,65 @@ export const PlayerScreen = {
       return;
     }
     this.htmlSubtitleActiveCueKey = cueKey;
+    if (typeof node.replaceChildren === "function") {
+      node.replaceChildren();
+    } else {
+      node.innerHTML = "";
+    }
     if (!activeCues.length) {
-      while (node.firstChild) {
-        node.removeChild(node.firstChild);
-      }
       node.classList.add("hidden");
       node.setAttribute("aria-hidden", "true");
       return;
     }
     const cueGroups = new Map();
     activeCues.forEach((cue) => {
-      const line =
-        cue?.renderLine == null
-          ? cue?.line == null
-            ? NaN
-            : Number(cue.line)
-          : Number(cue.renderLine);
-      const normalizedLine = Number.isFinite(line) ? clamp(line, -25, 125) : null;
+      const rawLine = cue?.line == null ? NaN : Number(cue.line);
+      const normalizedLine = Number.isFinite(rawLine) ? clamp(rawLine, 0, 100) : null;
+      const rawPosition = cue?.position == null ? NaN : Number(cue.position);
+      const position = Number.isFinite(rawPosition) ? clamp(rawPosition, 0, 100) : null;
       const align = ["start", "end", "center"].includes(cue?.align) ? cue.align : "center";
       const rawSize = cue?.size == null ? NaN : Number(cue.size);
       const size = Number.isFinite(rawSize) && rawSize > 0 ? clamp(rawSize, 10, 200) : null;
-      const rawPosition =
-        cue?.renderPosition == null
-          ? cue?.position == null
-            ? NaN
-            : Number(cue.position)
-          : Number(cue.renderPosition);
-      const position =
-        normalizedLine != null && Number.isFinite(rawPosition) ? clamp(rawPosition, 0, 100) : null;
-      // Key by TEXT ONLY: renderLine/renderPosition change every frame while
-      // tracking, and a layout-bearing key would respawn the node each frame.
-      const groupKey = `${cue?.text ?? ""}:${align}:${size ?? ""}`;
+      const groupKey = `${normalizedLine ?? "default"}:${position ?? "default"}:${align}:${size ?? ""}`;
       if (!cueGroups.has(groupKey)) {
-        cueGroups.set(groupKey, {
-          line: normalizedLine,
-          align,
-          size,
-          position,
-          key: groupKey,
-          cues: []
-        });
+        cueGroups.set(groupKey, { line: normalizedLine, position, align, size, cues: [] });
       }
       cueGroups.get(groupKey).cues.push(cue);
     });
-    // Pool keyed by group identity (text + layout): a node always tracks the
-    // same logical subtitle, so its CSS transition only ever animates the
-    // small step between adjacent slices of that same subtitle.
-    let pool = this.htmlSubtitleCueNodePool;
-    if (!(pool instanceof Map)) {
-      pool = new Map();
-      this.htmlSubtitleCueNodePool = pool;
-    }
-    const groups = Array.from(cueGroups.values());
-    for (const group of groups) {
-      let cueNode = pool.get(group.key);
-      if (!cueNode) {
-        cueNode = document.createElement("div");
-        pool.set(group.key, cueNode);
-      }
-      const className = `player-html-subtitle-cue player-html-subtitle-align-${group.align}${
-        group.line == null
-          ? " player-html-subtitle-default"
-          : ` player-html-subtitle-positioned${group.position != null ? " player-html-subtitle-x-anchored" : ""}`
-      }`;
-      if (cueNode.className !== className) {
-        cueNode.className = className;
-      }
+    cueGroups.forEach((group) => {
+      const cueNode = document.createElement("div");
+      cueNode.className = `player-html-subtitle-cue player-html-subtitle-align-${group.align}`;
       if (group.line == null) {
-        cueNode.style.top = "";
-        cueNode.style.left = "";
-        cueNode.style.fontSize = "";
+        cueNode.classList.add("player-html-subtitle-default");
       } else {
-        // Write the full transform directly: transform animates on the
-        // compositor without per-frame text layout. Percent coordinates are
-        // resolved to container px once per change (not per frame).
-        const rect = node.getBoundingClientRect();
-        const width = rect.width > 0 ? rect.width : 1;
-        const height = rect.height > 0 ? rect.height : 1;
-        const xPx = ((group.position ?? 0) / 100) * width;
-        const yPx = ((group.line ?? 0) / 100) * height;
-        if (cueNode.style.top !== "0px") {
-          cueNode.style.top = "0px";
-        }
-        if (cueNode.style.left !== "0px") {
-          cueNode.style.left = "0px";
-        }
-        if (cueNode.style.right !== "auto") {
+        cueNode.classList.add("player-html-subtitle-positioned");
+        cueNode.style.top = `${group.line}%`;
+        if (group.position != null) {
+          cueNode.style.left = `${group.position}%`;
           cueNode.style.right = "auto";
-        }
-        const anchor = group.position != null ? " translate(-50%, -50%)" : " translateY(-50%)";
-        const transformValue = `translate(${xPx}px, ${yPx}px)${anchor}`;
-        if (cueNode.style.transform !== transformValue) {
-          cueNode.style.transform = transformValue;
-        }
-        if (group.size != null) {
-          const sizeValue = `${group.size}%`;
-          if (cueNode.style.fontSize !== sizeValue) {
-            cueNode.style.fontSize = sizeValue;
-          }
-        } else if (cueNode.style.fontSize) {
-          cueNode.style.fontSize = "";
+          const anchor = group.align === "start" ? "0%" : group.align === "end" ? "-100%" : "-50%";
+          cueNode.style.transform = `translate(${anchor}, -50%) translateY(var(--player-subtitle-offset))`;
         }
       }
-      const textSignature = group.cues.map((cue) => String(cue.text || "")).join("\n");
-      if (cueNode.__textSignature !== textSignature) {
-        cueNode.__textSignature = textSignature;
-        while (cueNode.firstChild) {
-          cueNode.removeChild(cueNode.firstChild);
-        }
-        group.cues.forEach((cue) =>
-          String(cue.text || "")
-            .split("\n")
-            .forEach((lineText) => {
-              const cleanLine = lineText.trim();
-              if (!cleanLine) {
-                return;
-              }
-              const lineNode = document.createElement("span");
-              lineNode.className = "player-html-subtitle-line";
-              lineNode.textContent = cleanLine;
-              cueNode.appendChild(lineNode);
-            })
-        );
+      if (group.size != null && group.line != null) {
+        cueNode.style.fontSize = `${group.size}%`;
       }
-      if (cueNode.parentNode !== node) {
+      group.cues.forEach((cue) =>
+        String(cue.text || "")
+          .split("\n")
+          .forEach((line) => {
+            const cleanLine = line.trim();
+            if (!cleanLine) {
+              return;
+            }
+            const lineNode = document.createElement("span");
+            lineNode.className = "player-html-subtitle-line";
+            lineNode.textContent = cleanLine;
+            cueNode.appendChild(lineNode);
+          })
+      );
+      if (cueNode.childNodes.length) {
         node.appendChild(cueNode);
-      }
-    }
-    pool.forEach((cueNode, key) => {
-      if (!cueGroups.has(key) && cueNode.parentNode === node) {
-        node.removeChild(cueNode);
       }
     });
     node.classList.remove("hidden");
@@ -13890,33 +13928,6 @@ export const PlayerScreen = {
     const activeCues = this.htmlSubtitleCues.filter(
       (cue) => subtitleTime >= cue.start && subtitleTime < cue.end
     );
-    // Tessellated \move slices are consecutive windows of one logical cue.
-    // When the active slice continues into a same-text successor, interpolate
-    // between the two slice positions so motion is sub-cell continuous per
-    // frame instead of jumping one grid cell per slice.
-    const cueSource = this.htmlSubtitleCues;
-    for (let index = 0; index < activeCues.length; index += 1) {
-      const cue = activeCues[index];
-      delete cue.renderLine;
-      delete cue.renderPosition;
-      if (cue.line == null || cue.position == null) {
-        continue;
-      }
-      const next = cueSource[cueSource.indexOf(cue) + 1];
-      if (
-        !next ||
-        next.text !== cue.text ||
-        next.line == null ||
-        next.position == null ||
-        Math.abs(next.start - cue.end) > 0.02
-      ) {
-        continue;
-      }
-      const span = Math.max(0.001, next.start - cue.start);
-      const progress = clamp((subtitleTime - cue.start) / span, 0, 1);
-      cue.renderLine = cue.line + (next.line - cue.line) * progress;
-      cue.renderPosition = cue.position + (next.position - cue.position) * progress;
-    }
     this.renderHtmlSubtitleOverlayCue(activeCues);
     return true;
   },
@@ -13929,23 +13940,12 @@ export const PlayerScreen = {
       clearTimeout(this.htmlSubtitleRenderTimer);
       this.htmlSubtitleRenderTimer = null;
     }
-    if (this.htmlSubtitleRenderFrame != null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(this.htmlSubtitleRenderFrame);
-      this.htmlSubtitleRenderFrame = null;
-    }
-    // Tessellated \move slices need position updates every vsync frame;
-    // timers drift against the video clock and read as judder.
     const render = () => {
       if (!this.renderHtmlSubtitleOverlayAtCurrentTime()) {
-        this.htmlSubtitleRenderFrame = null;
+        this.htmlSubtitleRenderTimer = null;
         return;
       }
-      const anyTracking = (this.htmlSubtitleCues || []).some((cue) => cue.line != null);
-      if (anyTracking && typeof requestAnimationFrame === "function") {
-        this.htmlSubtitleRenderFrame = requestAnimationFrame(render);
-      } else {
-        this.htmlSubtitleRenderTimer = setTimeout(render, 120);
-      }
+      this.htmlSubtitleRenderTimer = setTimeout(render, 120);
     };
     render();
   },

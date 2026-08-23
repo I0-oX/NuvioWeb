@@ -11686,9 +11686,7 @@ html.legacy-webos .debug-console-log-frame {
 }
 
 .player-html-subtitle-positioned {
-  /* Motion is computed per-frame from playback time (rAF-driven transform
-     writes); a CSS transition here would lag behind the interpolation. */
-  will-change: transform;
+  transform: translateY(-50%) translateY(var(--player-subtitle-offset));
 }
 
 .player-html-subtitle-positioned.player-html-subtitle-align-start {

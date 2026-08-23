@@ -88,6 +88,28 @@ async function validatePngDimensions(filePath, expectedWidth, expectedHeight, la
   }
 }
 
+async function validateOpaquePng(filePath, label) {
+  const image = await readFile(filePath);
+  const isPng =
+    image.length >= 26 &&
+    image.readUInt32BE(0) === 0x89504e47 &&
+    image.readUInt32BE(4) === 0x0d0a1a0a;
+  const colorType = isPng ? image.readUInt8(25) : -1;
+  if (!isPng || colorType === 4 || colorType === 6) {
+    throw new Error(`${label} must use an opaque PNG color type: ${filePath}`);
+  }
+
+  let offset = 8;
+  while (offset + 12 <= image.length) {
+    const chunkLength = image.readUInt32BE(offset);
+    const chunkType = image.toString("ascii", offset + 4, offset + 8);
+    if (chunkType === "tRNS") {
+      throw new Error(`${label} must not contain a transparency chunk: ${filePath}`);
+    }
+    offset += chunkLength + 12;
+  }
+}
+
 function validateWebOsServiceManifest(serviceManifest) {
   if (String(serviceManifest?.id || "") !== webOsServiceId) {
     throw new Error(`webOS services.json must use service id ${webOsServiceId}.`);
@@ -182,6 +204,8 @@ async function stageApp() {
       130,
       "webOS large icon"
     ),
+    validateOpaquePng(path.join(rootDir, "assets", "images", "icon.png"), "webOS small icon"),
+    validateOpaquePng(path.join(rootDir, "assets", "images", "largeIcon.png"), "webOS large icon"),
     validatePngDimensions(
       path.join(rootDir, "assets", "images", "splash.png"),
       1920,

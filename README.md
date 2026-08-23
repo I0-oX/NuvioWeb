@@ -16,8 +16,7 @@
 
 NuvioTV Web supports **Samsung Tizen TVs from 2018 onward (Tizen 4+)** and **LG webOS TVs from 2020 onward (webOS 5+)**.
 On Tizen 4, some advanced audio/subtitle features may be limited, and torrent/P2P playback is unavailable by design.
-The public Samsung Store profile does not package the local EngineFS service, so torrent/P2P remains unavailable unless Samsung approves the partner-service route.
-On LG webOS, torrent/P2P uses only the bundled local companion service; no external torrent streaming server is configured or required.
+On Tizen 5+ and LG webOS, torrent/P2P uses only the bundled local companion service; no external torrent streaming server is configured or required.
 
 - [Nuvio WebTV Installer](https://github.com/NuvioMedia/NuvioWeb/releases/latest) for Windows, macOS, and Linux
 - [Samsung Tizen WGT](https://github.com/NuvioMedia/NuvioWeb/releases/latest) for manual installation
@@ -41,7 +40,7 @@ npm run package:tizen:store
 npm run package:webos
 ```
 
-`package:tizen` is the unsigned development package. `package:tizen:store` requires Tizen Studio/Web CLI and a configured security profile, and creates the signed public-store profile with EngineFS/P2P disabled unless Samsung partner approval is explicitly configured. NuvioTV Web is built with JavaScript, HTML, CSS, and platform TV APIs. Building requires Node.js and npm; package installation additionally requires the relevant Tizen or webOS tools.
+`package:tizen` creates the unsigned WGT used by development and the Nuvio WebTV Installer. The installer signs it locally for the target TV before installation. `package:tizen:store` is a separate Seller Office build: it requires Tizen Studio/Web CLI and a configured security profile, and creates the signed Store package with the local EngineFS service included so Tizen 5+ retains torrent/P2P playback. Tizen 4 still reports P2P as unsupported at runtime. NuvioTV Web is built with JavaScript, HTML, CSS, and platform TV APIs. Building requires Node.js and npm; package installation additionally requires the relevant Tizen or webOS tools.
 
 ## License
 

@@ -288,7 +288,7 @@ function isSeriesDetailMeta(meta = {}, episodes = null) {
   const normalizedType = String(meta?.type || "")
     .trim()
     .toLowerCase();
-  if (normalizedType === "series" || normalizedType === "tv") {
+  if (normalizedType === "series") {
     return true;
   }
   const resolvedEpisodes = Array.isArray(episodes)

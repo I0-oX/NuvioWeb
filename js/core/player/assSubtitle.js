@@ -98,7 +98,7 @@ function sanitizeAssDialogueText(text) {
 
 const ASS_POSITION_RE = /\\pos\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i;
 const ASS_MOVE_RE =
-  /\\move\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i;
+  /\\move\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?))?\s*\)/i;
 const ASS_FONT_SIZE_RE = /\\fs(\d+(?:\.\d+)?)/i;
 
 function getAssPlayRes(normalized) {
@@ -223,20 +223,22 @@ function getAssMoveTrack(rawText, start, end, playRes) {
   if (![x1, y1, x2, y2].every(Number.isFinite)) {
     return null;
   }
-  // Optional t1/t2 offset pair (ms relative to cue start) bounds the motion.
-  // ASS_MOVE_RE stops at the 4th coordinate, so read the remainder of the
-  // override block after the match to find them.
-  let t1 = 0;
-  let t2 = (end - start) * 1000;
-  const rest = String(rawText || "").slice(
-    String(rawText || "").indexOf(match[0]) + match[0].length
-  );
-  const timesMatch = rest.match(/^\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)/);
-  if (timesMatch) {
-    t1 = Number(timesMatch[1]);
-    t2 = Number(timesMatch[2]);
+  const durationMs = Math.max(0, (end - start) * 1000);
+  const requestedStartMs = match[5] == null ? 0 : Number(match[5]);
+  const requestedEndMs = match[6] == null ? durationMs : Number(match[6]);
+  if (
+    !Number.isFinite(requestedStartMs) ||
+    !Number.isFinite(requestedEndMs) ||
+    requestedEndMs <= requestedStartMs
+  ) {
+    return null;
   }
-  if (!Number.isFinite(t1) || !Number.isFinite(t2) || t2 <= t1) {
+  // ASS move offsets are relative to the dialogue. Clamp malformed or
+  // producer-rounded offsets to the cue so the fallback never emits cues
+  // outside the original timing window.
+  const moveStartMs = clampNumber(requestedStartMs, 0, durationMs);
+  const moveEndMs = clampNumber(requestedEndMs, 0, durationMs);
+  if (moveEndMs <= moveStartMs) {
     return null;
   }
   const dx = x2 - x1;
@@ -244,34 +246,52 @@ function getAssMoveTrack(rawText, start, end, playRes) {
   if (Math.sqrt(dx * dx + dy * dy) < 24) {
     return null;
   }
-  // A slice every ~60ms matches the overlay repaint cadence, so each slice
-  // paints exactly once and the tracking reads as continuous motion.
-  const steps = Math.max(2, Math.min(96, Math.round((t2 - t1) / 60)));
-  const moveStart = start + t1 / 1000;
-  const moveEnd = start + t2 / 1000;
+  const moveStart = start + moveStartMs / 1000;
+  const moveEnd = start + moveEndMs / 1000;
   const slices = [];
+  const appendSlice = (sliceStart, sliceEnd, x, y) => {
+    if (!(sliceEnd > sliceStart)) {
+      return;
+    }
+    const line = assYToVttLine(y, playRes.y);
+    const position = assXToVttPosition(x, playRes.x);
+    if (line == null || position == null) {
+      return;
+    }
+    const previous = slices[slices.length - 1];
+    if (
+      previous &&
+      previous.line === line &&
+      previous.position === position &&
+      Math.abs(previous.end - sliceStart) < 0.001
+    ) {
+      previous.end = sliceEnd;
+      return;
+    }
+    slices.push({ start: sliceStart, end: sliceEnd, line, position });
+  };
+  appendSlice(start, moveStart, x1, y1);
+  // A slice every roughly 60ms keeps the timer-driven fallback close to the
+  // source motion without producing an unbounded number of VTT cues.
+  const steps = Math.max(2, Math.min(96, Math.ceil(((moveEnd - moveStart) * 1000) / 60)));
   for (let index = 0; index < steps; index += 1) {
+    const from = index / steps;
     const to = (index + 1) / steps;
+    const sliceStart = moveStart + (moveEnd - moveStart) * from;
+    const sliceEnd = moveStart + (moveEnd - moveStart) * to;
     const cx = x1 + dx * to;
     const cy = y1 + dy * to;
-    const line = assYToVttLine(cy, playRes.y);
-    const position = assXToVttPosition(cx, playRes.x);
-    const previous = slices[slices.length - 1];
-    if (previous && previous.line === line && previous.position === position) {
-      previous.until =
-        index === steps - 1 ? end : moveStart + ((moveEnd - moveStart) * (index + 1)) / steps;
-      continue;
-    }
-    slices.push({
-      line,
-      position,
-      until: index === steps - 1 ? end : moveStart + ((moveEnd - moveStart) * (index + 1)) / steps
-    });
+    appendSlice(sliceStart, sliceEnd, cx, cy);
   }
+  appendSlice(moveEnd, end, x2, y2);
   if (slices.length < 2) {
     return null;
   }
-  return { slices, moveStart };
+  return { slices };
+}
+
+function clampNumber(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, Number(value)));
 }
 /**
  * Derive VTT layout from a cue's ASS override tags. `\an` is authoritative
@@ -346,9 +366,10 @@ function assSizeToVttPercent(fontSize, baseFontSize) {
  * Convert ASS/SSA `Dialogue:` events to VTT cues: timestamps become
  * `HH:MM:SS.mmm` ranges, dialogue text keeps line breaks and drops styling
  * tags. Static alignment is preserved approximately: `\an` maps to VTT
- * `line`/`align`, and a `\pos`/`\move` start point maps to a vertical `line`
- * and a coarse horizontal `align` bucket. `\move` animation, rotation and
- * fades are not represented. Malformed events are dropped.
+ * `line`/`align`, and a `\pos`/`\move` point maps to a vertical `line` plus
+ * a horizontal `position`. `\move` animation is represented by bounded
+ * stepped cues; rotation and fades are not represented. Malformed events
+ * are dropped.
  */
 export function convertAssDialogueToVttCues(body) {
   const normalized = normalizeBody(body);
@@ -420,22 +441,13 @@ export function convertAssDialogueToVttCues(body) {
       cues.push(cue);
       return;
     }
-    const { slices, moveStart } = moveTrack;
-    let previousEnd = start;
-    for (let index = 0; index < slices.length; index += 1) {
-      const slice = slices[index];
-      if (!slice || slice.line == null || slice.position == null) {
-        continue;
-      }
-      const sliceStart = index === 0 ? start : Math.max(previousEnd, moveStart);
-      const sliceEnd = index === slices.length - 1 ? end : slice.until;
-      if (!(sliceEnd > sliceStart)) {
-        previousEnd = Math.max(previousEnd, sliceEnd);
+    for (const slice of moveTrack.slices) {
+      if (!slice || slice.line == null || slice.position == null || !(slice.end > slice.start)) {
         continue;
       }
       const cue = {
-        start: sliceStart,
-        end: sliceEnd,
+        start: slice.start,
+        end: slice.end,
         text,
         line: slice.line,
         position: slice.position,
@@ -445,7 +457,6 @@ export function convertAssDialogueToVttCues(body) {
         cue.size = sizePercent;
       }
       cues.push(cue);
-      previousEnd = sliceEnd;
     }
   });
   return cues.sort((left, right) => left.start - right.start || left.end - right.end);

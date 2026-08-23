@@ -966,11 +966,29 @@ function uniqueFramesInRange(frames, startMs, endMs) {
 }
 
 function isTextSubtitleTrack(track) {
-  return Boolean(track && track.type === 0x11 && /^S_TEXT\//i.test(String(track.codecId || "")));
+  var codecId = String((track && track.codecId) || "");
+  return Boolean(
+    track && track.type === 0x11 && (/^S_TEXT\//i.test(codecId) || isAssSubtitleCodec(codecId))
+  );
+}
+
+function isAssSubtitleCodec(value) {
+  var text = String(value || "").trim();
+  if (!text) return false;
+  return (
+    /^S_TEXT\/(?:ASS|SSA)$/i.test(text) ||
+    /^(?:text\/x-ass|application\/x-ass|text\/x-ssa|application\/x-ssa)$/i.test(text) ||
+    /^(?:ass|ssa|advanced substation alpha|substation alpha)$/i.test(text)
+  );
 }
 
 function isAssTextSubtitleTrack(track) {
-  return Boolean(track && /^S_TEXT\/(?:ASS|SSA)$/i.test(String(track.codecId || "")));
+  return Boolean(
+    track &&
+    (isAssSubtitleCodec(track.codecId) ||
+      isAssSubtitleCodec(track.codecName) ||
+      isAssSubtitleCodec(track.codec_name))
+  );
 }
 
 function isAssTimestamp(value) {
@@ -1045,7 +1063,7 @@ function normalizeTextSubtitlePayload(track, payload) {
     text = textAfterCommaCount(assEvent, 9) || assEvent;
   } else if (hasShortAssTiming) {
     text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || assEvent;
-  } else if (/^S_TEXT\/(?:ASS|SSA)$/i.test(String((track && track.codecId) || ""))) {
+  } else if (isAssTextSubtitleTrack(track)) {
     text = assEvent;
   }
   return text.replace(/\n{2,}/g, "\n").trim();
