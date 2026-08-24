@@ -1078,10 +1078,26 @@ function normalizeTextSubtitlePayload(track, payload) {
     isAssTimestamp(fields[2]);
   var hasShortAssTiming =
     fields.length >= 3 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
+  // webOS may strip Start/End and expose the positional form
+  // "Layer,?,Style,Name,MarginL,MarginR,MarginV,Effect,Text" with no
+  // timestamps (e.g. 0,0,Flashback_Italics - Top,News,0,0,0,,text).
+  var hasPositionalAssShape =
+    isAssTextSubtitleTrack(track) &&
+    !hasLayeredAssTiming &&
+    !hasShortAssTiming &&
+    fields.length >= 9 &&
+    /^-?\d+$/.test(String(fields[0] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
+    String(fields[7] || "").trim() === "";
   if (hasLayeredAssTiming) {
     text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
     text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || "";
+  } else if (hasPositionalAssShape) {
+    text = textAfterCommaCount(assEvent, 8) || "";
   } else if (isAssTextSubtitleTrack(track)) {
     text = assEvent;
   }
