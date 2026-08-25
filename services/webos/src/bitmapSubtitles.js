@@ -1268,51 +1268,18 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     fields[2] = formatAssTimestamp(endMs);
     return "Dialogue: " + fields.slice(0, 9).concat(fields.slice(9).join(",")).join(",");
   }
-  // Short (Start,End,Style,...) and positional (0,0,Style,...) forms both
-  // place Style at index 2. Preserve Style/Name/Margins/Effect so alignment
-  // and typesetting survive; only re-inject real timestamps. Recognize only
-  // those two signatures so arbitrary rows still fall back to Default.
-  var hasShortTiming = fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
-  var hasPositionalShape =
-    isAssTextSubtitleTrack(track) &&
-    fields.length >= 9 &&
-    /^-?\d+$/.test(String(fields[0] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
-    String(fields[7] || "").trim() === "";
-  var hasStructuredFields = hasShortTiming || hasPositionalShape;
+  // Positional/short forms carry webOS-specific labels in the leading fields
+  // (not reliable ASS Style/Name/Layer), so render with the always-present
+  // Default style. Real positioning lives in \pos/\an tags inside the Text,
+  // which are preserved. Only the Text and re-injected timestamps are kept.
+
   var assText = text.replace(/\r?\n/g, "\\N");
-  // Positional form carries the ASS Layer in fields[0]; short SSA has none,
-  // so default it to 0. Preserve a non-zero layer to keep stacking order.
-  var layer = hasPositionalShape ? String(fields[0] || "").trim() || "0" : "0";
-  var style = hasStructuredFields ? String(fields[2] || "").trim() || "Default" : "Default";
-  var name = hasStructuredFields ? String(fields[3] || "").trim() : "";
-  var marginL = hasStructuredFields ? String(fields[4] || "").trim() || "0" : "0";
-  var marginR = hasStructuredFields ? String(fields[5] || "").trim() || "0" : "0";
-  var marginV = hasStructuredFields ? String(fields[6] || "").trim() || "0" : "0";
-  var effect = hasStructuredFields ? String(fields[7] || "").trim() : "";
   return (
-    "Dialogue: " +
-    layer +
-    "," +
+    "Dialogue: 0," +
     formatAssTimestamp(startMs) +
     "," +
     formatAssTimestamp(endMs) +
-    "," +
-    style +
-    "," +
-    name +
-    "," +
-    marginL +
-    "," +
-    marginR +
-    "," +
-    marginV +
-    "," +
-    effect +
-    "," +
+    ",Default,,0,0,0,," +
     assText
   );
 }
