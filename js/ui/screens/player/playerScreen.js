@@ -13866,12 +13866,29 @@ export const PlayerScreen = {
     this.assSubtitleRenderer = renderer;
     const result = await renderer.init();
     if (!result.ok || !isCurrentSelection()) {
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("[Nuvio ASS] renderer.init failed", {
+          error: result.error,
+          detail: result.detail,
+          currentTime: video?.currentTime,
+          paused: video?.paused
+        });
+      }
       const fallbackVtt = convertAssBodyToVtt(body);
       this.destroyAssSubtitleRenderer(renderer);
       return { applied: false, fallbackVtt };
     }
     renderer.setDelay(this.subtitleDelayMs);
     this.showAssSubtitleContainer();
+    // Diagnostic: sample currentTime twice to detect a stuck time source
+    // (frame loop runs but video.currentTime does not advance).
+    if (globalThis.__NUVIO_DEBUG_ASS__ && typeof setTimeout === "function") {
+      const t0 = Number(video?.currentTime || 0);
+      setTimeout(() => {
+        const t1 = Number(video?.currentTime || 0);
+        console.info("[Nuvio ASS] time-sample", { t0, t1, advanced: t1 > t0 });
+      }, 1200);
+    }
     return { applied: true };
   },
 

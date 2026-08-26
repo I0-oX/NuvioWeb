@@ -71,6 +71,17 @@ export function createAssRenderer({
       if (destroyed) {
         return { ok: false, error: "ass-renderer-destroyed" };
       }
+      debugAssRender("runtime", {
+        token,
+        resampling,
+        ResizeObserver: typeof globalThis.ResizeObserver,
+        requestAnimationFrame: typeof globalThis.requestAnimationFrame,
+        requestVideoFrameCallback: video ? typeof video.requestVideoFrameCallback : null,
+        videoPaused: video && typeof video.paused === "boolean" ? video.paused : null,
+        videoTime: video && Number.isFinite(video.currentTime) ? video.currentTime : null,
+        videoSize: video ? [video.videoWidth, video.videoHeight] : null,
+        containerSize: container ? [container.clientWidth, container.clientHeight] : null
+      });
       let AssConstructor;
       try {
         AssConstructor = await loadAssSubtitleLib();
