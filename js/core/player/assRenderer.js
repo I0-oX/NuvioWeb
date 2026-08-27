@@ -26,9 +26,6 @@ function clearContainer(container) {
 }
 
 function debugAssRender(stage, details = {}) {
-  if (!globalThis.__NUVIO_DEBUG_ASS__) {
-    return;
-  }
   try {
     console.info(`[Nuvio ASS] ${stage}`, details);
   } catch (_) {
@@ -188,11 +185,7 @@ export function createAssRenderer({
         // play/playing and stops on pause/waiting; logging those events with
         // currentTime reveals whether the loop is alive and whether time
         // advances after the renderer takes over mid-playback.
-        if (
-          globalThis.__NUVIO_DEBUG_ASS__ &&
-          video &&
-          typeof video.addEventListener === "function"
-        ) {
+        if (video && typeof video.addEventListener === "function") {
           ["play", "playing", "pause", "waiting", "seeking"].forEach((type) => {
             const handler = () => {
               debugAssRender("video-event", {

@@ -13866,7 +13866,7 @@ export const PlayerScreen = {
     this.assSubtitleRenderer = renderer;
     const result = await renderer.init();
     if (!result.ok || !isCurrentSelection()) {
-      if (globalThis.__NUVIO_DEBUG_ASS__ && typeof console !== "undefined" && console.warn) {
+      if (typeof console !== "undefined" && console.warn) {
         console.warn("[Nuvio ASS] renderer.init failed", {
           error: result.error,
           detail: result.detail,
@@ -13882,7 +13882,7 @@ export const PlayerScreen = {
     this.showAssSubtitleContainer();
     // Diagnostic: sample currentTime twice to detect a stuck time source
     // (frame loop runs but video.currentTime does not advance).
-    if (globalThis.__NUVIO_DEBUG_ASS__ && typeof setTimeout === "function") {
+    if (typeof setTimeout === "function") {
       const t0 = Number(video?.currentTime || 0);
       setTimeout(() => {
         const t1 = Number(video?.currentTime || 0);
