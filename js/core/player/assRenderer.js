@@ -62,6 +62,15 @@ export function createAssRenderer({
 
   let instance = null;
   let destroyed = false;
+  let videoEventHandlers = [];
+  const cleanupVideoEventHandlers = () => {
+    if (video && typeof video.removeEventListener === "function") {
+      videoEventHandlers.forEach(({ type, handler }) => {
+        video.removeEventListener(type, handler);
+      });
+    }
+    videoEventHandlers = [];
+  };
 
   return {
     get active() {
@@ -175,7 +184,29 @@ export function createAssRenderer({
             // Best effort: playback is already advancing; nothing to sync.
           }
         }
+        // Debug: trace the frame-loop lifecycle. ass.js starts its loop on
+        // play/playing and stops on pause/waiting; logging those events with
+        // currentTime reveals whether the loop is alive and whether time
+        // advances after the renderer takes over mid-playback.
+        if (
+          globalThis.__NUVIO_DEBUG_ASS__ &&
+          video &&
+          typeof video.addEventListener === "function"
+        ) {
+          ["play", "playing", "pause", "waiting", "seeking"].forEach((type) => {
+            const handler = () => {
+              debugAssRender("video-event", {
+                type,
+                paused: video.paused,
+                currentTime: Number.isFinite(video.currentTime) ? video.currentTime : null
+              });
+            };
+            video.addEventListener(type, handler);
+            videoEventHandlers.push({ type, handler });
+          });
+        }
       } catch (error) {
+        cleanupVideoEventHandlers();
         instance = null;
         clearContainer(container);
         return {
@@ -229,6 +260,7 @@ export function createAssRenderer({
         return;
       }
       destroyed = true;
+      cleanupVideoEventHandlers();
       if (instance) {
         try {
           instance.destroy();

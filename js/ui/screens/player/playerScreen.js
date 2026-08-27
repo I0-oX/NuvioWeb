@@ -13866,7 +13866,7 @@ export const PlayerScreen = {
     this.assSubtitleRenderer = renderer;
     const result = await renderer.init();
     if (!result.ok || !isCurrentSelection()) {
-      if (typeof console !== "undefined" && console.warn) {
+      if (globalThis.__NUVIO_DEBUG_ASS__ && typeof console !== "undefined" && console.warn) {
         console.warn("[Nuvio ASS] renderer.init failed", {
           error: result.error,
           detail: result.detail,
