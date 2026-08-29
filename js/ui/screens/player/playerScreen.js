@@ -14260,11 +14260,14 @@ export const PlayerScreen = {
         windowData.windowEndSeconds || startSeconds + EMBEDDED_TEXT_SUBTITLE_WINDOW_SECONDS
       );
       const assBody = String(windowData.assBody || "");
+      // Alternative: decide per track, not per window, to avoid mid-playback
+      // switch (VTT -> ASS) that freezes. hasAdvancedAssOverrideTags is window-
+      // local and triggers ass.js creation while video is already playing
+      // (play/playing already fired). Track codec is stable for the whole
+      // selection.
       const shouldUseAss =
         Boolean(assBody) &&
-        (this.webOsEmbeddedTextSubtitleUsingAss ||
-          windowData.hasAdvancedAssOverrideTags ||
-          isAssSubtitleCodec(windowData.codecId) ||
+        (isAssSubtitleCodec(windowData.codecId) ||
           isAssSubtitleCodec(track?.codec) ||
           isAssSubtitleCodec(track?.codec_name));
       if (shouldUseAss) {
