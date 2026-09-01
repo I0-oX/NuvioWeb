@@ -167,7 +167,7 @@ export function createAssRenderer({
         // would freeze at its initial seek. Re-dispatch play (ass.js listens
         // to both play and playing, but the player binds only playing, so a
         // synthetic playing would trigger onPlaying side effects).
-        if (video && typeof video.paused === "boolean" && !video.paused) {
+        if (video && typeof video.dispatchEvent === "function") {
           try {
             // Legacy webOS runtimes may lack the Event constructor; fall back
             // to document.createEvent like PlayerController.emitVideoEvent.
