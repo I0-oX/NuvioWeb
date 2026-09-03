@@ -1051,15 +1051,51 @@ function parseAssTimestampMs(value) {
   );
 }
 
-function textAfterCommaCount(value, commaCount) {
-  var text = String(value || "");
-  var offset = 0;
-  for (var index = 0; index < commaCount; index += 1) {
-    var comma = text.indexOf(",", offset);
-    if (comma < 0) return "";
-    offset = comma + 1;
+function hasBalancedAssBraces(text) {
+  var value = String(text || "");
+  return value.split("{").length === value.split("}").length;
+}
+
+// ASS event rows do not always carry the full 10-field header: stripped or
+// remuxed events can omit Style/Name/Margins/Effect. A fixed comma count
+// then slices mid-override-block, projecting fragments like
+// "320,820)\\frz358.4..." as visible text (or dropping the cue when commas
+// run out). Walk the split point down until the Text candidate has balanced
+// braces; otherwise preserve the historical fixed-count extraction verbatim.
+function splitAssEventFields(assEvent, firstTry, floor, fallbackTry) {
+  var segments = String(assEvent || "").split(",");
+  var fallback = {
+    header: segments.slice(0, fallbackTry),
+    text: segments.slice(fallbackTry).join(",")
+  };
+  var top = Math.min(firstTry, segments.length - 1);
+  if (top === firstTry) {
+    var direct = segments.slice(firstTry).join(",");
+    if (!direct) {
+      return fallback;
+    }
+    if (hasBalancedAssBraces(direct)) {
+      return { header: segments.slice(0, firstTry), text: direct };
+    }
+    top = firstTry - 1;
   }
-  return text.slice(offset);
+  for (var splitAt = top; splitAt >= floor; splitAt--) {
+    var text = segments.slice(splitAt).join(",");
+    if (text && hasBalancedAssBraces(text)) {
+      return { header: segments.slice(0, splitAt), text: text };
+    }
+  }
+  return fallback;
+}
+
+// Vector drawings (\\p1...\\p0) and truncated override blocks carry no
+// readable dialogue. Plain-text pipelines (VTT/HTML/native) must not project
+// them as cue text; the ASS body path keeps the original payload for ass.js.
+function sanitizePlainTextAssCue(text) {
+  return String(text || "")
+    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
+    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
+    .replace(/\{[^\n}]*$/gm, "");
 }
 
 function decodeTextSubtitlePayload(payload) {
@@ -1117,11 +1153,11 @@ function normalizeTextSubtitlePayload(track, payload) {
     /^-?\d+$/.test(String(fields[0] || "").trim()) &&
     /^-?\d+$/.test(String(fields[1] || "").trim());
   if (hasLayeredAssTiming) {
-    text = textAfterCommaCount(assEvent, 9) || "";
+    text = splitAssEventFields(assEvent, 9, 3, 9).text;
   } else if (hasShortAssTiming) {
-    text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || "";
+    text = splitAssEventFields(assEvent, 8, 2, fields.length >= 9 ? 8 : 2).text;
   } else if (hasPositionalAssShape) {
-    text = textAfterCommaCount(assEvent, 8) || "";
+    text = splitAssEventFields(assEvent, 8, 3, 8).text;
   } else if (isAssTextSubtitleTrack(track)) {
     text = assEvent;
   }
@@ -1253,7 +1289,7 @@ function getAssDialogueText(track, frame) {
   var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
   var fields = event.split(",");
   if (fields.length >= 10 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
-    return fields.slice(9).join(",").trim();
+    return splitAssEventFields(event, 9, 3, 9).text.trim();
   }
   if (
     fields.length >= 9 &&
@@ -1261,7 +1297,7 @@ function getAssDialogueText(track, frame) {
     isAssTimestamp(fields[1]) &&
     isAssTextSubtitleTrack(track)
   ) {
-    return fields.slice(8).join(",").trim();
+    return splitAssEventFields(event, 8, 2, 8).text.trim();
   }
   return normalizeTextSubtitlePayload(track, frame && frame.payload);
 }
@@ -1276,9 +1312,14 @@ function buildAssDialogueLine(track, frame, nextFrame) {
   var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
   var fields = event.split(",");
   if (fields.length >= 10 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
-    fields[1] = formatAssTimestamp(startMs);
-    fields[2] = formatAssTimestamp(endMs);
-    return "Dialogue: " + fields.slice(0, 9).concat(fields.slice(9).join(",")).join(",");
+    var split = splitAssEventFields(event, 9, 3, 9);
+    var header = split.header.slice();
+    while (header.length < 9) {
+      header.push("");
+    }
+    header[1] = formatAssTimestamp(startMs);
+    header[2] = formatAssTimestamp(endMs);
+    return "Dialogue: " + header.slice(0, 9).concat(split.text).join(",");
   }
   // Preserve leading ASS fields only for the two shapes that carry them.
   // Metadata alone is not enough: webOS can expose ordinary cue text as a
@@ -1627,7 +1668,11 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
   var hasOverrides = false;
   var hasAdvancedOverrides = false;
   frames.forEach(function (frame, index) {
-    var text = normalizeTextSubtitlePayload(track, frame.payload);
+    var rawText = normalizeTextSubtitlePayload(track, frame.payload);
+    if (!rawText) return;
+    // Strip drawings/truncated tags for the readable-text body only; the
+    // ASS body below keeps the original payload for ass.js.
+    var text = sanitizePlainTextAssCue(rawText);
     if (!text) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
@@ -1648,8 +1693,8 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
     }
     outputBytes += blockBytes;
     cueBlocks.push(block);
-    hasOverrides = hasOverrides || hasAssOverrideTags(text);
-    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(text);
+    hasOverrides = hasOverrides || hasAssOverrideTags(rawText);
+    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(rawText);
   });
   var body = "WEBVTT\n\n" + (cueBlocks.length ? cueBlocks.join("\n\n") + "\n\n" : "");
   var includeAssBody =
