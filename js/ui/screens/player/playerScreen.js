@@ -14218,11 +14218,10 @@ export const PlayerScreen = {
       // not fire it; make ass.js capture requestAnimationFrame instead.
       forceRafFrameLoop: Environment.isWebOS(),
       // The webOS native pipeline can leave video.paused=true while the app
-      // is playing. Kick the newly-created renderer only when the controller
-      // and player UI both still consider playback active, so a paused
-      // selection does not start an uncancellable frame loop.
-      forcePlaybackFrameLoopKick:
-        Environment.isWebOS() && PlayerController.isPlaying && !this.paused
+      // is playing. Trust the controller's playing state here: the player UI
+      // paused flag can lag transient playback states, and a missed kick
+      // leaves ass.js frozen on its initial cue.
+      forcePlaybackFrameLoopKick: Environment.isWebOS() && PlayerController.isPlaying
     });
     if (!renderer || typeof renderer.init !== "function") {
       return { applied: false, fallbackVtt: convertAssBodyToVtt(body) };
