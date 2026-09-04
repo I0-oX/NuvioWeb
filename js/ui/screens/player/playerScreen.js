@@ -10862,6 +10862,12 @@ export const PlayerScreen = {
         if (this.selectedEmbeddedSubtitleTrackIndex !== selectedIndex) {
           return;
         }
+        // Re-check ownership at fire time, not just at schedule time: an
+        // ASS/HTML takeover may have completed during these 50ms, and its
+        // native hide must not be undone by a stale re-enable.
+        if (this.webOsEmbeddedTextSubtitleUsingAss || this.webOsEmbeddedTextSubtitleUsingHtml) {
+          return;
+        }
         PlayerController.setWebOsEmbeddedSubtitleTrack(targetTrackIndex, selectedIndex);
       }, 50);
       this.embeddedSubtitleCueRefreshTimers.add(timerId);
@@ -16317,6 +16323,13 @@ export const PlayerScreen = {
             this.destroyAssSubtitleRenderer();
             return false;
           }
+          // Claim app ownership BEFORE awaiting the native hide: the hide is
+          // an async Luna round trip, and any refresh racing it must already
+          // see that the native renderer has to stay off. Otherwise a delayed
+          // enable lands after the hide and both renderers stay visible.
+          const wasUsingHtml = this.webOsEmbeddedTextSubtitleUsingHtml;
+          this.webOsEmbeddedTextSubtitleUsingAss = true;
+          this.webOsEmbeddedTextSubtitleUsingHtml = false;
           const nativeRendererHidden = await Promise.resolve(
             PlayerController.setWebOsEmbeddedSubtitleNativeVisibility(
               false,
@@ -16324,12 +16337,12 @@ export const PlayerScreen = {
             )
           );
           if (!nativeRendererHidden) {
+            this.webOsEmbeddedTextSubtitleUsingAss = false;
+            this.webOsEmbeddedTextSubtitleUsingHtml = wasUsingHtml;
             this.destroyAssSubtitleRenderer();
             return false;
           }
           this.clearHtmlSubtitleOverlay();
-          this.webOsEmbeddedTextSubtitleUsingAss = true;
-          this.webOsEmbeddedTextSubtitleUsingHtml = false;
           return true;
         }
         if (assResult.fallbackVtt) {
@@ -16357,6 +16370,9 @@ export const PlayerScreen = {
       }
 
       if (!this.webOsEmbeddedTextSubtitleUsingHtml) {
+        // Same ownership claim as the ASS branch above: never let a native
+        // enable slip in while the hide round trip is in flight.
+        this.webOsEmbeddedTextSubtitleUsingHtml = true;
         const nativeRendererHidden = isTizenEmbeddedTextSubtitleFallbackTrack(track)
           ? Boolean(PlayerController.applyAvPlaySubtitleRenderMode?.("html"))
           : typeof PlayerController.setWebOsEmbeddedSubtitleNativeVisibility === "function"
@@ -16372,9 +16388,9 @@ export const PlayerScreen = {
           this.webOsEmbeddedTextSubtitleTrack !== track ||
           !nativeRendererHidden
         ) {
+          this.webOsEmbeddedTextSubtitleUsingHtml = false;
           return false;
         }
-        this.webOsEmbeddedTextSubtitleUsingHtml = true;
       }
 
       this.htmlSubtitleCues = cues;
