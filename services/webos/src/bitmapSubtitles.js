@@ -1658,10 +1658,15 @@ function looksLikeAssTagSoup(text) {
 // override blocks so only readable text ships. The ASS body keeps the
 // original payload for ass.js.
 function sanitizePlainTextAssCue(text) {
-  return String(text || "")
-    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
-    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
-    .replace(/\{[^}]*\}/g, "");
+  return (
+    String(text || "")
+      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
+      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
+      .replace(/\{[^}]*\}/g, "")
+      // A truncated final override block (no closing brace) is tag source,
+      // not dialogue — same parity as the app converter.
+      .replace(/\{[^\n}]*$/gm, "")
+  );
 }
 
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {

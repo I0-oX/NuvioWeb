@@ -133,6 +133,7 @@ const taggedLine =
   "Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
 const normalLine = "Dialogue: 0,0:00:18.00,0:00:20.00,Default,,0,0,0,,Normal line";
 const bracesLine = "Dialogue: 0,0:00:21.00,0:00:23.00,Default,,0,0,0,,a}b";
+const tailLine = "Dialogue: 0,0:00:22.00,0:00:24.00,Default,,0,0,0,,Tail {\\fad(200,200";
 const window = service.buildTextSubtitleWindowPayload(
   track,
   [
@@ -140,7 +141,8 @@ const window = service.buildTextSubtitleWindowPayload(
     { payload: toPayload(fragmentLine), timestampMs: 12000, durationMs: 2000 },
     { payload: toPayload(taggedLine), timestampMs: 13000, durationMs: 1000 },
     { payload: toPayload(normalLine), timestampMs: 18000, durationMs: 2000 },
-    { payload: toPayload(bracesLine), timestampMs: 21000, durationMs: 2000 }
+    { payload: toPayload(bracesLine), timestampMs: 21000, durationMs: 2000 },
+    { payload: toPayload(tailLine), timestampMs: 22000, durationMs: 2000 }
   ],
   0,
   60000,
@@ -153,6 +155,8 @@ check("VTT body keeps readable cue", window.body.includes("Normal line"), true);
 check("VTT body keeps placed cue text", window.body.includes("Placed"), true);
 check("VTT body has no override braces", window.body.includes("{\\an8"), false);
 check("VTT body keeps brace prose", window.body.includes("a}b"), true);
+check("VTT body cuts truncated tail, keeps head", window.body.includes("Tail"), true);
+check("VTT body has no tail residue", window.body.includes("fad(200,200"), false);
 check(
   "ASS body keeps drawing payload for ass.js",
   window.assBody.includes("{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}"),
