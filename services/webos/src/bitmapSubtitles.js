@@ -1639,7 +1639,8 @@ function hasUnbalancedAssMarkup(value) {
   return text.split("{").length !== text.split("}").length;
 }
 
-var ASS_TAG_SOUP_RE = /\\[A-Za-z]+[(\&]/;
+var ASS_TAG_SOUP_RE =
+  /\\[A-Za-z]+[(\&]|\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
 
 // See js/core/player/assSubtitle.js: true only for override-tag residue
 // (backslash command with unbalanced braces, or with `(`/`&` and no block).
@@ -1666,6 +1667,7 @@ function sanitizePlainTextAssCue(text) {
       // the tag residue up to `}` so the readable dialogue is rescued.
       .replace(/^[^{}\n]*\\[^{}\n]*\}/, "")
       .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
+      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
       .replace(/\{[^}]*\}/g, "")
       // A truncated final override block (no closing brace) is tag source,
       // not dialogue — same parity as the app converter.

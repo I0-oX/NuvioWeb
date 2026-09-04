@@ -152,7 +152,8 @@ function hasUnbalancedAssMarkup(value) {
   return text.split("{").length !== text.split("}").length;
 }
 
-const ASS_TAG_SOUP_RE = /\\[A-Za-z]+[(\&]/;
+const ASS_TAG_SOUP_RE =
+  /\\[A-Za-z]+[(\&]|\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
 
 // Detects override-tag residue that survived block stripping: a backslash
 // command with unbalanced braces (cut block), or a backslash command opening

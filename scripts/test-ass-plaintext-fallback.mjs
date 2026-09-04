@@ -2,12 +2,6 @@
 // fallback) must never project ASS internals as cue text, and must rescue
 // legitimate dialogue following orphan tag prefixes.
 // Run: node ./scripts/test-ass-plaintext-fallback.mjs
-//
-// Covered units:
-// - js/core/player/assSubtitle.js (external-file VTT fallback)
-// - services/webos/src/bitmapSubtitles.js (embedded VTT window body and ASS
-//   body event filtering; the ASS body keeps well-formed payloads untouched
-//   for ass.js).
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -89,6 +83,19 @@ check(
   JSON.stringify(["The Culling Game's Objective"])
 );
 
+// --- Pure unbraced tag fragments with no dialogue are dropped. ---
+check(
+  "unbraced digit-suffixed tag fragment yields no cue",
+  JSON.stringify(vttCueTexts(assBody(["11.12,955.26,-783.88)\\fsp0.01"]))),
+  JSON.stringify([])
+);
+
+check(
+  "unbraced command with parens yields no cue",
+  JSON.stringify(vttCueTexts(assBody(["\\pos(10,20)"]))),
+  JSON.stringify([])
+);
+
 // --- Legitimate text is never dropped. ---
 check(
   "positioned dialogue is preserved",
@@ -131,10 +138,14 @@ const track = { codecId: "S_TEXT/ASS" };
 const toPayload = (line) => Buffer.from(line, "utf8");
 const drawingLine =
   "Dialogue: 0,0:00:15.00,0:00:17.00,Default,,0,0,0,,{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}";
+const unclosedDrawingLine =
+  "Dialogue: 0,0:00:16.00,0:00:17.00,Default,,0,0,0,,{\\p1}m 10 20 l 30 40";
 const fragmentLine =
   "Dialogue: 0,0:00:12.00,0:00:14.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing";
 const cullingGameLine =
   "Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,11.12,955.26,-783.88)\\fsp0.01}The Culling Game's Objective";
+const pureFragmentLine =
+  "Dialogue: 0,0:00:11.00,0:00:12.00,Default,,0,0,0,,11.12,955.26,-783.88)\\fsp0.01";
 const taggedLine =
   "Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
 const normalLine = "Dialogue: 0,0:00:18.00,0:00:20.00,Default,,0,0,0,,Normal line";
@@ -144,8 +155,10 @@ const window = service.buildTextSubtitleWindowPayload(
   track,
   [
     { payload: toPayload(drawingLine), timestampMs: 15000, durationMs: 2000 },
+    { payload: toPayload(unclosedDrawingLine), timestampMs: 16000, durationMs: 1000 },
     { payload: toPayload(fragmentLine), timestampMs: 12000, durationMs: 2000 },
     { payload: toPayload(cullingGameLine), timestampMs: 10000, durationMs: 2000 },
+    { payload: toPayload(pureFragmentLine), timestampMs: 11000, durationMs: 1000 },
     { payload: toPayload(taggedLine), timestampMs: 13000, durationMs: 1000 },
     { payload: toPayload(normalLine), timestampMs: 18000, durationMs: 2000 },
     { payload: toPayload(bracesLine), timestampMs: 21000, durationMs: 2000 },
@@ -157,7 +170,9 @@ const window = service.buildTextSubtitleWindowPayload(
 );
 
 check("VTT body has no drawing coordinates", window.body.includes("64.89"), false);
+check("VTT body has no unclosed drawing coordinates", window.body.includes("10 20"), false);
 check("VTT body has no tag fragment", window.body.includes("frz358"), false);
+check("VTT body has no pure unbraced fragment", window.body.includes("fsp0.01"), false);
 check("VTT body rescues Menacing dialogue", window.body.includes("Menacing"), true);
 check(
   "VTT body rescues Culling Game dialogue",
