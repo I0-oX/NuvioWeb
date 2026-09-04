@@ -1267,11 +1267,14 @@ function getAssDialogueText(track, frame) {
 }
 
 function buildAssDialogueLine(track, frame, nextFrame) {
-  var text = getAssDialogueText(track, frame);
-  if (!text) return "";
-  // A Text field with dangling markup (backslash plus unbalanced braces) is
-  // a corrupt slice, not dialogue: ass.js would project it literally, so the
-  // event is dropped. Balanced tagged text is preserved untouched.
+  var rawText = getAssDialogueText(track, frame);
+  if (!rawText) return "";
+  // Drop orphan tag prefix if present (e.g. `...)\frz...}`) so ass.js
+  // receives clean text instead of projecting it literally.
+  var text = rawText.replace(/^[^{}\n]*\\[^{}\n]*\}/, "");
+  // A Text field with remaining dangling markup (backslash plus unbalanced
+  // braces) is a corrupt slice, not dialogue: ass.js would project it
+  // literally, so the event is dropped. Balanced tagged text is preserved.
   var markupCheck = stripAssTextEscapes(text);
   if (markupCheck.indexOf("\\") >= 0 && hasUnbalancedAssMarkup(markupCheck)) {
     return "";
@@ -1279,15 +1282,15 @@ function buildAssDialogueLine(track, frame, nextFrame) {
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
+  var assText = text.replace(/\r?\n/g, "\\N");
   var raw = decodeTextSubtitlePayload(frame && frame.payload);
   var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
   var fields = event.split(",");
   if (fields.length >= 10 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
     fields[1] = formatAssTimestamp(startMs);
     fields[2] = formatAssTimestamp(endMs);
-    return "Dialogue: " + fields.slice(0, 9).concat(fields.slice(9).join(",")).join(",");
+    return "Dialogue: " + fields.slice(0, 9).concat(assText).join(",");
   }
-  // Preserve leading ASS fields only for the two shapes that carry them.
   // Metadata alone is not enough: webOS can expose ordinary cue text as a
   // comma-separated row, and treating its first fields as Style/Name/Margins
   // duplicates that prefix in the generated Dialogue line.
@@ -1302,7 +1305,6 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     /^-?\d+$/.test(String(fields[6] || "").trim()) &&
     String(fields[7] || "").trim() === "";
   var hasStructuredFields = hasShortTiming || hasPositionalShape;
-  var assText = text.replace(/\r?\n/g, "\\N");
   // Positional form carries the ASS Layer in fields[0]; short SSA has none,
   // so default it to 0. Preserve a non-zero layer to keep stacking order.
   var layer = hasPositionalShape ? String(fields[0] || "").trim() || "0" : "0";
@@ -1660,8 +1662,10 @@ function looksLikeAssTagSoup(text) {
 function sanitizePlainTextAssCue(text) {
   return (
     String(text || "")
+      // An orphan override block fragment sliced mid-tag before `{`: drop
+      // the tag residue up to `}` so the readable dialogue is rescued.
+      .replace(/^[^{}\n]*\\[^{}\n]*\}/, "")
       .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
-      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
       .replace(/\{[^}]*\}/g, "")
       // A truncated final override block (no closing brace) is tag source,
       // not dialogue — same parity as the app converter.

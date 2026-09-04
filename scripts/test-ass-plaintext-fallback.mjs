@@ -1,6 +1,6 @@
 // Focused regression tests: plain-text subtitle pipelines (VTT/HTML/native
-// fallback) must never project ASS internals as cue text, and must never
-// drop legitimate dialogue to achieve it.
+// fallback) must never project ASS internals as cue text, and must rescue
+// legitimate dialogue following orphan tag prefixes.
 // Run: node ./scripts/test-ass-plaintext-fallback.mjs
 //
 // Covered units:
@@ -8,10 +8,6 @@
 // - services/webos/src/bitmapSubtitles.js (embedded VTT window body and ASS
 //   body event filtering; the ASS body keeps well-formed payloads untouched
 //   for ass.js).
-//
-// Deliberate non-goals (documented, need Format-aware work elsewhere):
-// - short-header event recovery (no guessing where Text starts);
-// - digit-suffixed commands without parens/ampersands (e.g. bare `\fsp0.0`).
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -76,13 +72,21 @@ check(
   JSON.stringify(["Sign"])
 );
 
-// --- Override fragments are suppressed, never projected. ---
+// --- Orphan tag prefixes are stripped, rescuing the readable dialogue. ---
 check(
-  "mid-tag fragment yields no cue",
+  "mid-tag fragment rescues dialogue (Menacing)",
   JSON.stringify(
     vttCueTexts(assBody(["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing"]))
   ),
-  JSON.stringify([])
+  JSON.stringify(["Menacing"])
+);
+
+check(
+  "mid-tag fragment rescues dialogue (Culling Game)",
+  JSON.stringify(
+    vttCueTexts(assBody(["11.12,955.26,-783.88)\\fsp0.01}The Culling Game's Objective"]))
+  ),
+  JSON.stringify(["The Culling Game's Objective"])
 );
 
 // --- Legitimate text is never dropped. ---
@@ -129,6 +133,8 @@ const drawingLine =
   "Dialogue: 0,0:00:15.00,0:00:17.00,Default,,0,0,0,,{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}";
 const fragmentLine =
   "Dialogue: 0,0:00:12.00,0:00:14.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing";
+const cullingGameLine =
+  "Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,11.12,955.26,-783.88)\\fsp0.01}The Culling Game's Objective";
 const taggedLine =
   "Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
 const normalLine = "Dialogue: 0,0:00:18.00,0:00:20.00,Default,,0,0,0,,Normal line";
@@ -139,6 +145,7 @@ const window = service.buildTextSubtitleWindowPayload(
   [
     { payload: toPayload(drawingLine), timestampMs: 15000, durationMs: 2000 },
     { payload: toPayload(fragmentLine), timestampMs: 12000, durationMs: 2000 },
+    { payload: toPayload(cullingGameLine), timestampMs: 10000, durationMs: 2000 },
     { payload: toPayload(taggedLine), timestampMs: 13000, durationMs: 1000 },
     { payload: toPayload(normalLine), timestampMs: 18000, durationMs: 2000 },
     { payload: toPayload(bracesLine), timestampMs: 21000, durationMs: 2000 },
@@ -151,6 +158,12 @@ const window = service.buildTextSubtitleWindowPayload(
 
 check("VTT body has no drawing coordinates", window.body.includes("64.89"), false);
 check("VTT body has no tag fragment", window.body.includes("frz358"), false);
+check("VTT body rescues Menacing dialogue", window.body.includes("Menacing"), true);
+check(
+  "VTT body rescues Culling Game dialogue",
+  window.body.includes("The Culling Game's Objective"),
+  true
+);
 check("VTT body keeps readable cue", window.body.includes("Normal line"), true);
 check("VTT body keeps placed cue text", window.body.includes("Placed"), true);
 check("VTT body has no override braces", window.body.includes("{\\an8"), false);
@@ -162,7 +175,12 @@ check(
   window.assBody.includes("{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}"),
   true
 );
-check("ASS body drops fragment event", window.assBody.includes("frz358"), false);
+check("ASS body rescues Menacing without fragment", window.assBody.includes(",,Menacing"), true);
+check(
+  "ASS body rescues Culling Game without fragment",
+  window.assBody.includes(",,The Culling Game's Objective"),
+  true
+);
 check(
   "ASS body keeps tagged event intact",
   window.assBody.includes("{\\an8\\pos(1011.12,955.26)}Placed"),

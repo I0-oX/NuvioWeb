@@ -176,6 +176,10 @@ function sanitizeAssDialogueText(text) {
     String(text || "")
       .replace(/\\[Nn]/g, "\n")
       .replace(/\\h/g, " ")
+      // An orphan override block fragment (e.g. `11.12,955.26)\fsp0.01}`)
+      // sliced mid-tag before `{`: drop the tag residue up to `}` so the
+      // readable dialogue following it is rescued.
+      .replace(/^[^{}\n]*\\[^{}\n]*\}/, "")
       // Vector drawings (\\p1...\\p0) carry no readable dialogue. Remove
       // closed drawing sections only, mirroring ass.js semantics (text after
       // an unclosed \\p block is drawing data up to the event end, never
