@@ -16824,17 +16824,7 @@ export const PlayerScreen = {
     if (!text) {
       return false;
     }
-    // AVPlay may expose the complete SSA event or its positional CSV fields.
-    // Strip only the control prefix for structural validation; plain cue text
-    // such as "Dialogue: hello" must remain renderable.
     const payload = text.replace(/^\s*(?:Dialogue|Comment)\s*:\s*/i, "");
-    const hasAssTiming =
-      /^(?:(?:\d+|Marked\s*=\s*\d+)\s*,\s*)?\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,\s*\d+:\d{1,2}:\d{1,2}[.,]\d{1,3}\s*,/i.test(
-        payload
-      );
-    if (hasAssTiming) {
-      return true;
-    }
     if (/[.!?\u00C0-\u024F]/.test(text)) {
       return false;
     }
@@ -16844,6 +16834,26 @@ export const PlayerScreen = {
       /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(payload) &&
       payload.split(",").length >= 6
     );
+  },
+
+  isSelectedAvPlaySubtitleAssTrack() {
+    const tracks = PlayerController.getAvPlaySubtitleTracks?.() || [];
+    const selected = PlayerController.getSelectedAvPlaySubtitleTrackIndex?.() ?? -1;
+    const track = tracks.find((entry) => Number(entry?.avplayTrackIndex) === Number(selected));
+    if (!track) {
+      return false;
+    }
+    // Firmware entries sometimes omit the codec or carry it as format; the
+    // probed embedded metadata fills those gaps (codecId/codec_name).
+    const embedded = this.getEmbeddedSubtitleTrackByNativeIndex(Number(track.avplayTrackIndex));
+    const codecs = [
+      track?.codec,
+      track?.format,
+      embedded?.codec,
+      embedded?.codecId,
+      embedded?.codec_name
+    ];
+    return codecs.some((value) => isAssSubtitleCodec(value));
   },
 
   renderAvPlaySubtitleChange(detail = {}) {
@@ -16880,10 +16890,25 @@ export const PlayerScreen = {
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/\r\n/g, "\n")
       .replace(/\r/g, "\n");
-    // Samsung AVPlay can expose SSA/ASS fields instead of dialogue text.
+    // Samsung AVPlay can expose positional SSA/ASS fields without dialogue text.
     // Never project that control payload into the video overlay.
-    const text = this.parseSubtitleCueText(rawText);
-    if (!text || this.isAvPlaySubtitleControlPayload(rawText)) {
+    if (this.isAvPlaySubtitleControlPayload(rawText)) {
+      this.renderHtmlSubtitleOverlayCue([]);
+      return;
+    }
+    // The selected track is already known to be ASS (or not) via codec
+    // metadata: strip the event header structurally, nothing else to check.
+    let dialogueText = rawText;
+    if (this.isSelectedAvPlaySubtitleAssTrack() && /^\s*(?:Dialogue|Comment)\s*:/i.test(rawText)) {
+      const fields = rawText.replace(/^\s*(?:Dialogue|Comment)\s*:/i, "").split(",");
+      if (fields.length >= 10) {
+        dialogueText = fields.slice(9).join(",");
+      } else if (fields.length >= 9) {
+        dialogueText = fields.slice(8).join(",");
+      }
+    }
+    const text = this.parseSubtitleCueText(dialogueText);
+    if (!text) {
       this.renderHtmlSubtitleOverlayCue([]);
       return;
     }
