@@ -142,11 +142,19 @@ function formatVttTimestamp(totalSeconds) {
 }
 
 function sanitizeAssDialogueText(text) {
-  return String(text || "")
-    .replace(/\\[Nn]/g, "\n")
-    .replace(/\\h/g, " ")
-    .replace(/\{[^}]*\}/g, "")
-    .trim();
+  return (
+    String(text || "")
+      .replace(/\\[Nn]/g, "\n")
+      .replace(/\\h/g, " ")
+      // Vector drawings (\\p1...\\p0) carry no readable dialogue. Remove
+      // closed drawing sections only, mirroring ass.js semantics (text after
+      // an unclosed \\p block is drawing data up to the event end, never
+      // dialogue). All other override blocks keep the historical handling.
+      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
+      .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
+      .replace(/\{[^}]*\}/g, "")
+      .trim()
+  );
 }
 
 const ASS_POSITION_RE = /\\pos\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i;

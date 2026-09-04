@@ -1621,13 +1621,25 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
+// Vector drawings (\\p1...\\p0) carry no readable dialogue. Strip closed
+// drawing sections (and unclosed ones running to the event end, per ASS
+// semantics) from the readable-text body only; the ASS body keeps the
+// original payload so ass.js still renders the shapes.
+function stripAssDrawingSections(text) {
+  return String(text || "")
+    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
+    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "");
+}
+
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {
   var cueBlocks = [];
   var outputBytes = Buffer.byteLength("WEBVTT\n\n", "utf8");
   var hasOverrides = false;
   var hasAdvancedOverrides = false;
   frames.forEach(function (frame, index) {
-    var text = normalizeTextSubtitlePayload(track, frame.payload);
+    var rawText = normalizeTextSubtitlePayload(track, frame.payload);
+    if (!rawText) return;
+    var text = stripAssDrawingSections(rawText);
     if (!text) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
@@ -1648,8 +1660,8 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
     }
     outputBytes += blockBytes;
     cueBlocks.push(block);
-    hasOverrides = hasOverrides || hasAssOverrideTags(text);
-    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(text);
+    hasOverrides = hasOverrides || hasAssOverrideTags(rawText);
+    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(rawText);
   });
   var body = "WEBVTT\n\n" + (cueBlocks.length ? cueBlocks.join("\n\n") + "\n\n" : "");
   var includeAssBody =
