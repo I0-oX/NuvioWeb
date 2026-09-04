@@ -1,13 +1,17 @@
-// Focused regression tests: ASS vector drawings must never surface as
-// readable cue text in plain-text pipelines (VTT/HTML/native fallback).
-// Run: node ./scripts/test-ass-drawing-fallback.mjs
-// A drawing section carries no dialogue by ASS semantics (ass.js renders it
-// as a vector shape with empty text, and text after an unclosed \p block is
-// drawing data up to the event end), so suppressing it cannot truncate
-// legitimate dialogue. Covered units:
+// Focused regression tests: plain-text subtitle pipelines (VTT/HTML/native
+// fallback) must never project ASS internals as cue text, and must never
+// drop legitimate dialogue to achieve it.
+// Run: node ./scripts/test-ass-plaintext-fallback.mjs
+//
+// Covered units:
 // - js/core/player/assSubtitle.js (external-file VTT fallback)
-// - services/webos/src/bitmapSubtitles.js (embedded VTT window body; the ASS
-//   body must keep the original payload so ass.js still draws the shapes).
+// - services/webos/src/bitmapSubtitles.js (embedded VTT window body and ASS
+//   body event filtering; the ASS body keeps well-formed payloads untouched
+//   for ass.js).
+//
+// Deliberate non-goals (documented, need Format-aware work elsewhere):
+// - short-header event recovery (no guessing where Text starts);
+// - digit-suffixed commands without parens/ampersands (e.g. bare `\fsp0.0`).
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -52,14 +56,14 @@ function assBody(textLines) {
   ].join("\n");
 }
 
-// --- App converter: drawing-only cues produce no cue. ---
+// --- Drawings carry no dialogue: drawing-only cues produce no cue. ---
 check(
   "drawing-only event yields no cue",
   JSON.stringify(vttCueTexts(assBody(["{\\p1}m 64.89 68.77 l 64.17 67.11 l 63.09 66.4{\\p0}"]))),
   JSON.stringify([])
 );
 
-// --- App converter: dialogue adjacent to drawings is preserved. ---
+// --- Dialogue adjacent to drawings is preserved. ---
 check(
   "dialogue after closed drawing is preserved",
   JSON.stringify(vttCueTexts(assBody(["{\\p1}m 0 0 l 10 10{\\p0}Hello World"]))),
@@ -72,7 +76,16 @@ check(
   JSON.stringify(["Sign"])
 );
 
-// --- App converter: non-drawing overrides keep historical behavior. ---
+// --- Override fragments are suppressed, never projected. ---
+check(
+  "mid-tag fragment yields no cue",
+  JSON.stringify(
+    vttCueTexts(assBody(["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing"]))
+  ),
+  JSON.stringify([])
+);
+
+// --- Legitimate text is never dropped. ---
 check(
   "positioned dialogue is preserved",
   JSON.stringify(vttCueTexts(assBody(["{\\an8\\pos(1011.12,955.26)\\fsp0}The Culling Game"]))),
@@ -91,17 +104,43 @@ check(
   JSON.stringify(["Just text", "1, 2, 3, 4, 5, 6"])
 );
 
-// --- Service VTT window: drawings absent from readable text, kept for ass.js. ---
+check(
+  "unbalanced braces without backslash are preserved",
+  JSON.stringify(vttCueTexts(assBody(["a}b"]))),
+  JSON.stringify(["a}b"])
+);
+
+check(
+  "backslash path without commands is preserved",
+  JSON.stringify(vttCueTexts(assBody(["C:\\path (x86)\\app"]))),
+  JSON.stringify(["C:\\path (x86)\\app"])
+);
+
+check(
+  "truncated tail block is cut, head preserved",
+  JSON.stringify(vttCueTexts(assBody(["Tail {\\fad(200,200"]))),
+  JSON.stringify(["Tail"])
+);
+
+// --- Service VTT window: same guarantees end to end. ---
 const track = { codecId: "S_TEXT/ASS" };
 const toPayload = (line) => Buffer.from(line, "utf8");
 const drawingLine =
   "Dialogue: 0,0:00:15.00,0:00:17.00,Default,,0,0,0,,{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}";
+const fragmentLine =
+  "Dialogue: 0,0:00:12.00,0:00:14.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing";
+const taggedLine =
+  "Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
 const normalLine = "Dialogue: 0,0:00:18.00,0:00:20.00,Default,,0,0,0,,Normal line";
+const bracesLine = "Dialogue: 0,0:00:21.00,0:00:23.00,Default,,0,0,0,,a}b";
 const window = service.buildTextSubtitleWindowPayload(
   track,
   [
     { payload: toPayload(drawingLine), timestampMs: 15000, durationMs: 2000 },
-    { payload: toPayload(normalLine), timestampMs: 18000, durationMs: 2000 }
+    { payload: toPayload(fragmentLine), timestampMs: 12000, durationMs: 2000 },
+    { payload: toPayload(taggedLine), timestampMs: 13000, durationMs: 1000 },
+    { payload: toPayload(normalLine), timestampMs: 18000, durationMs: 2000 },
+    { payload: toPayload(bracesLine), timestampMs: 21000, durationMs: 2000 }
   ],
   0,
   60000,
@@ -109,15 +148,26 @@ const window = service.buildTextSubtitleWindowPayload(
 );
 
 check("VTT body has no drawing coordinates", window.body.includes("64.89"), false);
+check("VTT body has no tag fragment", window.body.includes("frz358"), false);
 check("VTT body keeps readable cue", window.body.includes("Normal line"), true);
+check("VTT body keeps placed cue text", window.body.includes("Placed"), true);
+check("VTT body has no override braces", window.body.includes("{\\an8"), false);
+check("VTT body keeps brace prose", window.body.includes("a}b"), true);
 check(
   "ASS body keeps drawing payload for ass.js",
   window.assBody.includes("{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}"),
   true
 );
+check("ASS body drops fragment event", window.assBody.includes("frz358"), false);
+check(
+  "ASS body keeps tagged event intact",
+  window.assBody.includes("{\\an8\\pos(1011.12,955.26)}Placed"),
+  true
+);
+check("ASS body keeps brace prose event", window.assBody.includes(",,a}b"), true);
 
 if (failures > 0) {
   console.error(`${failures} failing case(s)`);
   process.exit(1);
 }
-console.log("All ASS drawing fallback cases pass.");
+console.log("All ASS plain-text fallback cases pass.");

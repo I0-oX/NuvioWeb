@@ -1269,6 +1269,13 @@ function getAssDialogueText(track, frame) {
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
+  // A Text field with dangling markup (backslash plus unbalanced braces) is
+  // a corrupt slice, not dialogue: ass.js would project it literally, so the
+  // event is dropped. Balanced tagged text is preserved untouched.
+  var markupCheck = stripAssTextEscapes(text);
+  if (markupCheck.indexOf("\\") >= 0 && hasUnbalancedAssMarkup(markupCheck)) {
+    return "";
+  }
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
@@ -1621,14 +1628,40 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
-// Vector drawings (\\p1...\\p0) carry no readable dialogue. Strip closed
-// drawing sections (and unclosed ones running to the event end, per ASS
-// semantics) from the readable-text body only; the ASS body keeps the
-// original payload so ass.js still renders the shapes.
-function stripAssDrawingSections(text) {
+function stripAssTextEscapes(value) {
+  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
+}
+
+function hasUnbalancedAssMarkup(value) {
+  var text = String(value || "");
+  return text.split("{").length !== text.split("}").length;
+}
+
+var ASS_TAG_SOUP_RE = /\\[A-Za-z]+[(\&]/;
+
+// See js/core/player/assSubtitle.js: true only for override-tag residue
+// (backslash command with unbalanced braces, or with `(`/`&` and no block).
+// Legitimate dialogue, including backslash paths, never matches.
+function looksLikeAssTagSoup(text) {
+  var value = stripAssTextEscapes(text);
+  if (value.indexOf("\\") < 0) {
+    return false;
+  }
+  if (hasUnbalancedAssMarkup(value)) {
+    return true;
+  }
+  return ASS_TAG_SOUP_RE.test(value);
+}
+
+// Plain-text pipelines (VTT/HTML/native) cannot render ASS vector drawings
+// or truncated override blocks: drop drawing sections and strip balanced
+// override blocks so only readable text ships. The ASS body keeps the
+// original payload for ass.js.
+function sanitizePlainTextAssCue(text) {
   return String(text || "")
     .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
-    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "");
+    .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
+    .replace(/\{[^}]*\}/g, "");
 }
 
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {
@@ -1639,8 +1672,8 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
   frames.forEach(function (frame, index) {
     var rawText = normalizeTextSubtitlePayload(track, frame.payload);
     if (!rawText) return;
-    var text = stripAssDrawingSections(rawText);
-    if (!text) return;
+    var text = sanitizePlainTextAssCue(rawText);
+    if (!text || looksLikeAssTagSoup(text)) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
     if (!Number.isFinite(cueStartMs) || cueEndMs <= startMs || cueStartMs >= endMs) return;

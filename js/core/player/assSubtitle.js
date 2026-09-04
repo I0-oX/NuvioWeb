@@ -141,6 +141,36 @@ function formatVttTimestamp(totalSeconds) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
 }
 
+// Strips literal backslash escapes that collide with brace accounting before
+// inspecting markup residue.
+function stripAssTextEscapes(value) {
+  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
+}
+
+function hasUnbalancedAssMarkup(value) {
+  const text = String(value || "");
+  return text.split("{").length !== text.split("}").length;
+}
+
+const ASS_TAG_SOUP_RE = /\\[A-Za-z]+[(\&]/;
+
+// Detects override-tag residue that survived block stripping: a backslash
+// command with unbalanced braces (cut block), or a backslash command opening
+// `(` or `&` with no block at all (braceless fragment). Ordinary dialogue —
+// including backslash paths like `C:\path (x86)` or `a}b`-style braces —
+// does not match and is preserved. Never guesses where Text starts, so it
+// cannot truncate legitimate dialogue.
+function looksLikeAssTagSoup(text) {
+  const value = stripAssTextEscapes(text);
+  if (value.indexOf("\\") < 0) {
+    return false;
+  }
+  if (hasUnbalancedAssMarkup(value)) {
+    return true;
+  }
+  return ASS_TAG_SOUP_RE.test(value);
+}
+
 function sanitizeAssDialogueText(text) {
   return (
     String(text || "")
@@ -153,6 +183,9 @@ function sanitizeAssDialogueText(text) {
       .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*?\{[^}]*\\p0[^}]*\}/gi, "")
       .replace(/\{[^}]*\\p[1-9][^}]*\}[\s\S]*$/gi, "")
       .replace(/\{[^}]*\}/g, "")
+      // A truncated final override block (no closing brace) is tag source,
+      // not dialogue.
+      .replace(/\{[^\n}]*$/gm, "")
       .trim()
   );
 }
@@ -479,6 +512,11 @@ export function convertAssDialogueToVttCues(body) {
     const end = parseAssTimestamp(record.end);
     const text = sanitizeAssDialogueText(record.text);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) {
+      return;
+    }
+    // Tag-soup residue is not dialogue in any renderer: drop the cue instead
+    // of projecting override source as visible text.
+    if (looksLikeAssTagSoup(text)) {
       return;
     }
     const rawText = String(record.text || "");
