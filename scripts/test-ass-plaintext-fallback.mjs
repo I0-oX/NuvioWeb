@@ -8,14 +8,9 @@
 // - services/webos/src/bitmapSubtitles.js (embedded VTT window body and ASS
 //   body event filtering; well-formed payloads pass through untouched).
 //
-// Design rules under test (no Text-position guessing anywhere):
-// - Only closed drawing sections with strict bare `{\p0}` closers (or
-//   unclosed ones running to the event end) are removed; `{\p1\p0}Hello`
-//   keeps Hello, chained drawings resolve to the final text.
-// - Only provable tag residue (backslash + unbalanced braces + ASS command
-//   marker) is dropped; everything else passes through.
-// Deliberate non-goals: short-header Text recovery, bare digit-suffixed
-// commands without parens/ampersands in balanced text.
+// Drawing mode is stateful. Commas, literal commands and unmatched prose
+// braces are not evidence of corruption. Numeric cut-tag prefixes are
+// suppressed conservatively; arbitrary malformed event recovery is not attempted.
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -189,13 +184,182 @@ check(
   window.assBody.includes("{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}"),
   true
 );
-check("ASS body drops fragment event", window.assBody.includes("frz358"), false);
+check(
+  "ASS body preserves fragment for renderer interpretation",
+  window.assBody.includes("frz358"),
+  true
+);
 check(
   "ASS body keeps tagged event intact",
   window.assBody.includes("{\\an8\\pos(1011.12,955.26)}Placed"),
   true
 );
 check("ASS body keeps windows path event", window.assBody.includes("Path C:\\temp} ready"), true);
+
+const adversarialCases = [
+  ["Use \\fs2, please", "Use \\fs2, please"],
+  ["Path C:\\fs2, ready}", "Path C:\\fs2, ready}"],
+  ["{\\pos(10,20)}Hello, world", "Hello, world"],
+  ["{\\p1}m 0 0 l 1 1{\\p0\\bord2}Hello", "Hello"],
+  ["{\\p0\\p1}m 0 0 l 1 1{\\p0}Hello", "Hello"],
+  ["{\\p1}m 0 0{\\rDefault}Hello", "Hello"],
+  ["{\\t(0,100,\\p1)}Hello", "Hello"],
+  ["Set {unfinished", "Set {unfinished"]
+];
+for (const [input, expected] of adversarialCases) {
+  check(
+    `external preserves ${input}`,
+    JSON.stringify(vttCueTexts(assBody([input]))),
+    JSON.stringify([expected])
+  );
+  const result = service.buildTextSubtitleWindowPayload(
+    track,
+    [{ payload: toPayload(`0,2,Default,,0,0,0,,${input}`), timestampMs: 1000, durationMs: 1000 }],
+    0,
+    3000,
+    { includeAssBody: true }
+  );
+  check(
+    `embedded preserves ${input}`,
+    result.body.split("\n").slice(4).join("\n").trim(),
+    expected
+  );
+  check(`styled preserves ${input}`, result.assBody.includes(input), true);
+}
+check(
+  "styled complete event preserves unfinished override",
+  window.assBody.includes("fad(200,200"),
+  true
+);
+check("window preserves advanced styling signal", window.hasAdvancedAssOverrideTags, true);
+const plainWindow = service.buildTextSubtitleWindowPayload(
+  { codecId: "S_TEXT/UTF8" },
+  [{ payload: toPayload("Set {one}, use \\fs2, please"), timestampMs: 1000, durationMs: 1000 }],
+  0,
+  3000,
+  {}
+);
+check(
+  "non ASS prose keeps braces and commands",
+  plainWindow.body.includes("Set {one}, use \\fs2, please"),
+  true
+);
+const layeredWindow = service.buildTextSubtitleWindowPayload(
+  track,
+  [
+    {
+      payload: toPayload("533,2,Onscreen1,Screen,0,0,0,Banner,Hello"),
+      timestampMs: 1000,
+      durationMs: 1000
+    }
+  ],
+  0,
+  3000,
+  {}
+);
+check(
+  "Matroska read order is not layer",
+  layeredWindow.assBody.includes(
+    "Dialogue: 2,0:00:01.00,0:00:02.00,Onscreen1,Screen,0,0,0,Banner,Hello"
+  ),
+  true
+);
+
+check(
+  "timestamp-like plain text is not an event",
+  service.normalizeTextSubtitlePayload(
+    { codecId: "S_TEXT/UTF8" },
+    toPayload("0,0:00:01.00,0:00:02.00,A,B,C,D,E,F,Hello")
+  ),
+  "0,0:00:01.00,0:00:02.00,A,B,C,D,E,F,Hello"
+);
+const commaWindow = service.buildTextSubtitleWindowPayload(
+  track,
+  [
+    {
+      payload: toPayload("1,2,Default,,10,20,30,Banner,Hello, one, two"),
+      timestampMs: 1000,
+      durationMs: 500
+    }
+  ],
+  0,
+  3000,
+  {}
+);
+check(
+  "positional text retains commas and block duration",
+  commaWindow.assBody.includes(
+    "Dialogue: 2,0:00:01.00,0:00:01.50,Default,,10,20,30,Banner,Hello, one, two"
+  ),
+  true
+);
+
+// The renderer receives every balanced tag; only plain-text fallback removes
+// drawing paths and override syntax. Exercise both supported event envelopes.
+const animatedText =
+  "{\\move(10,20,30,40,0,500)\\t(0,500,\\fscx120)}{\\p1}m 0 0 l 10 10{\\p0}{\\k20}Hello, {\\kf30}world";
+for (const payload of [
+  `7,2,Default,,0,0,0,,${animatedText}`,
+  `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${animatedText}`
+]) {
+  const animatedWindow = service.buildTextSubtitleWindowPayload(
+    track,
+    [{ payload: toPayload(payload), timestampMs: 1000, durationMs: 1000 }],
+    0,
+    3000,
+    {}
+  );
+  check(
+    "ASS preserves animation, drawing, karaoke and commas",
+    animatedWindow.assBody
+      .split("\n")
+      .filter((line) => line.startsWith("Dialogue:"))
+      .join("\n"),
+    `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${animatedText}`
+  );
+  check(
+    "VTT renders only readable animated dialogue",
+    animatedWindow.body,
+    "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello, world\n\n"
+  );
+}
+
+// VTT applies heuristic filtering; ASS preserves extracted Text for ass.js.
+// Matching this signature does not prove that literal dialogue is corrupt.
+for (const envelope of [
+  (text) => `7,2,Default,,0,0,0,,${text}`,
+  (text) => `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${text}`
+]) {
+  for (const [text, expectedEvent, expectedVtt] of [
+    [
+      "Tail {\\fad(200,200",
+      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,Tail {\\fad(200,200",
+      "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nTail\n\n"
+    ],
+    [
+      "320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
+      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
+      "WEBVTT\n\n"
+    ]
+  ]) {
+    const result = service.buildTextSubtitleWindowPayload(
+      track,
+      [{ payload: toPayload(envelope(text)), timestampMs: 1000, durationMs: 1000 }],
+      0,
+      3000,
+      {}
+    );
+    check(
+      `ASS preserves exact event without fallback filtering: ${text}`,
+      result.assBody
+        .split("\n")
+        .filter((line) => line.startsWith("Dialogue:"))
+        .join("\n"),
+      expectedEvent
+    );
+    check(`VTT filtering exception has exact output: ${text}`, result.body, expectedVtt);
+  }
+}
 
 if (failures > 0) {
   console.error(`${failures} failing case(s)`);

@@ -1023,18 +1023,6 @@ function isAssTimestamp(value) {
   return /^\s*\d+:\d{1,2}:\d{1,2}[.:]\d{1,3}\s*$/.test(String(value || ""));
 }
 
-function isRawAssControlPayload(value) {
-  var text = String(value || "").trim();
-  if (!text) return false;
-  var payload = text.replace(/^\s*(?:Dialogue|Comment)\s*:\s*/i, "");
-  // Timed Dialogue/Comment rows are valid ASS subtitle events and must be
-  // parsed below; only positional AVPlay control CSV is rejected here.
-  return (
-    /^\s*\d+\s*,\s*\d+\s*,\s*(?:Onscreen\d*|Screen)\s*,/i.test(payload) &&
-    payload.split(",").length >= 6
-  );
-}
-
 function parseAssTimestampMs(value) {
   var match = String(value || "")
     .trim()
@@ -1090,32 +1078,31 @@ function normalizeTextSubtitlePayload(track, payload) {
   var text = decodeTextSubtitlePayload(payload);
   if (!text) return "";
 
-  // Inspect the original payload before removing Dialogue:/Comment: so
-  // structured ASS control rows are filtered without dropping plain cue text.
-  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(text)) {
-    return "";
-  }
   var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
-  // ASS-specific parsing follows the original-payload control check above.
+  // Only explicitly framed Dialogue rows carry textual timestamps.
+  var timedDialogue = isAssTextSubtitleTrack(track) && /^\s*Dialogue\s*:/i.test(text);
   var fields = assEvent.split(",");
 
   var hasLayeredAssTiming =
+    timedDialogue &&
     fields.length >= 3 &&
     /^(?:marked\s*=\s*)?-?\d+$/i.test(String(fields[0] || "").trim()) &&
     isAssTimestamp(fields[1]) &&
     isAssTimestamp(fields[2]);
   var hasShortAssTiming =
-    fields.length >= 3 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
-  // webOS may strip Start/End and expose the positional form
-  // "Layer,?,Style,Name,MarginL,MarginR,MarginV,Effect,Text" with no
-  // timestamps (e.g. 0,0,Flashback_Italics - Top,News,0,0,0,,text).
+    timedDialogue && fields.length >= 3 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
+  // Matroska ASS blocks contain ReadOrder, Layer, Style, Name, margins,
+  // Effect and Text; timestamps come from the enclosing block.
   var hasPositionalAssShape =
     isAssTextSubtitleTrack(track) &&
     !hasLayeredAssTiming &&
     !hasShortAssTiming &&
     fields.length >= 9 &&
     /^-?\d+$/.test(String(fields[0] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[1] || "").trim());
+    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
+    /^-?\d+$/.test(String(fields[6] || "").trim());
   if (hasLayeredAssTiming) {
     text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
@@ -1139,7 +1126,7 @@ function hasAdvancedAssOverrideTags(text) {
 
 function getEmbeddedAssCueDurationMs(frame) {
   var raw = decodeTextSubtitlePayload(frame && frame.payload);
-  if (!raw) return 0;
+  if (!/^\s*Dialogue\s*:/i.test(raw)) return 0;
   var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
   var fields = event.split(",");
   var startIndex = -1;
@@ -1162,13 +1149,14 @@ function getEmbeddedAssCueDurationMs(frame) {
 function getTextCueEndMs(frame, nextFrame) {
   var startMs = Number(frame && frame.timestampMs);
   if (!Number.isFinite(startMs)) return 0;
-  var embeddedDurationMs = getEmbeddedAssCueDurationMs(frame);
-  if (embeddedDurationMs > 0) {
-    return startMs + Math.min(embeddedDurationMs, MAX_TEXT_CUE_DURATION_MS);
-  }
+  // BlockDuration is authoritative, even for explicitly framed legacy rows.
   var durationMs = Number(frame && frame.durationMs);
   if (Number.isFinite(durationMs) && durationMs > 0) {
     return startMs + Math.min(durationMs, MAX_TEXT_CUE_DURATION_MS);
+  }
+  var embeddedDurationMs = getEmbeddedAssCueDurationMs(frame);
+  if (embeddedDurationMs > 0) {
+    return startMs + Math.min(embeddedDurationMs, MAX_TEXT_CUE_DURATION_MS);
   }
   var nextStartMs = Number(nextFrame && nextFrame.timestampMs);
   if (Number.isFinite(nextStartMs) && nextStartMs > startMs) {
@@ -1248,50 +1236,37 @@ function normalizeAssHeader(codecPrivate) {
 }
 
 function getAssDialogueText(track, frame) {
-  var raw = decodeTextSubtitlePayload(frame && frame.payload);
-  if (!raw) return "";
-  var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
-  var fields = event.split(",");
-  if (fields.length >= 10 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
-    return fields.slice(9).join(",").trim();
-  }
-  if (
-    fields.length >= 9 &&
-    isAssTimestamp(fields[0]) &&
-    isAssTimestamp(fields[1]) &&
-    isAssTextSubtitleTrack(track)
-  ) {
-    return fields.slice(8).join(",").trim();
-  }
   return normalizeTextSubtitlePayload(track, frame && frame.payload);
 }
 
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
-  // Drop only provable tag residue (backslash plus unbalanced braces plus
-  // an ASS command marker); balanced tagged text passes through untouched.
-  // The tail rule below rescues readable heads of truncated blocks.
-  var cleanText = text.replace(/\{[^\n}]*$/gm, "");
-  if (isAssMarkupResidue(cleanText)) {
-    return "";
-  }
+  // Leave interpretation to ass.js; fallback heuristics must not rewrite ASS.
+  var cleanText = text;
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
   var raw = decodeTextSubtitlePayload(frame && frame.payload);
+  var timedDialogue = isAssTextSubtitleTrack(track) && /^\s*Dialogue\s*:/i.test(raw);
   var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
   var fields = event.split(",");
-  if (fields.length >= 10 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
+  if (
+    timedDialogue &&
+    fields.length >= 10 &&
+    isAssTimestamp(fields[1]) &&
+    isAssTimestamp(fields[2])
+  ) {
     fields[1] = formatAssTimestamp(startMs);
     fields[2] = formatAssTimestamp(endMs);
-    return "Dialogue: " + fields.slice(0, 9).concat(fields.slice(9).join(",")).join(",");
+    return "Dialogue: " + fields.slice(0, 9).concat(cleanText).join(",");
   }
   // Preserve leading ASS fields only for the two shapes that carry them.
   // Metadata alone is not enough: webOS can expose ordinary cue text as a
   // comma-separated row, and treating its first fields as Style/Name/Margins
   // duplicates that prefix in the generated Dialogue line.
-  var hasShortTiming = fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
+  var hasShortTiming =
+    timedDialogue && fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
   var hasPositionalShape =
     isAssTextSubtitleTrack(track) &&
     fields.length >= 9 &&
@@ -1299,13 +1274,11 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     /^-?\d+$/.test(String(fields[1] || "").trim()) &&
     /^-?\d+$/.test(String(fields[4] || "").trim()) &&
     /^-?\d+$/.test(String(fields[5] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
-    String(fields[7] || "").trim() === "";
+    /^-?\d+$/.test(String(fields[6] || "").trim());
   var hasStructuredFields = hasShortTiming || hasPositionalShape;
   var assText = cleanText.replace(/\r?\n/g, "\\N");
-  // Positional form carries the ASS Layer in fields[0]; short SSA has none,
-  // so default it to 0. Preserve a non-zero layer to keep stacking order.
-  var layer = hasPositionalShape ? String(fields[0] || "").trim() || "0" : "0";
+  // Matroska stores ReadOrder first, then Layer; ReadOrder is not a layer.
+  var layer = hasPositionalShape ? String(fields[1] || "").trim() || "0" : "0";
   var style = hasStructuredFields ? String(fields[2] || "").trim() || "Default" : "Default";
   var name = hasStructuredFields ? String(fields[3] || "").trim() : "";
   var marginL = hasStructuredFields ? String(fields[4] || "").trim() || "0" : "0";
@@ -1628,37 +1601,49 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
-function stripAssTextEscapes(value) {
-  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
-}
-
-var ASS_MARKUP_COMMAND_RE =
-  /\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
-
-// See js/core/player/assSubtitle.js: true only for override-tag residue, so
-// legitimate dialogue is never dropped and Text positions never guessed.
+// A numeric coordinate tail immediately followed by an override command is a
+// damaged event signature. A comma or unmatched brace in prose is not enough.
 function isAssMarkupResidue(text) {
-  var value = stripAssTextEscapes(text);
-  if (value.indexOf("\\") < 0 || !ASS_MARKUP_COMMAND_RE.test(value)) {
-    return false;
-  }
-  var flattened = value.replace(/\{[^}]*\}/g, "").replace(/\([^()]*\)/g, "");
-  if (flattened.split("{").length !== flattened.split("}").length) {
-    return true;
-  }
-  return flattened.indexOf(",") >= 0;
+  return /^\s*[-+]?\d+(?:\.\d+)?(?:\s*,\s*[-+]?\d+(?:\.\d+)?)+\s*\)\s*\\(?:pos\(|move\(|org\(|clip\(|iclip\(|fr[xyz]?[-+]?\d|fsp[-+]?\d|[1-4]?c&)/i.test(
+    String(text || "")
+  );
 }
 
-// Plain-text pipelines (VTT/HTML/native) cannot render ASS vector drawings:
-// drop drawing sections (strict closers, tempered openers, same rules as the
-// app converter) and strip balanced override blocks so only readable text
-// ships. The ASS body keeps drawable payloads for ass.js.
+function trimAssOverrideTail(text) {
+  return String(text || "").replace(/\{\s*\\[A-Za-z1-4][^}]*$/, "");
+}
+
+// Track drawing mode across blocks. Only top-level tags change the mode;
+// transform arguments are not immediate drawing commands.
 function sanitizePlainTextAssCue(text) {
-  return String(text || "")
-    .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*?\{\s*\\p0\s*\}/gi, "")
-    .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*$/gi, "")
-    .replace(/\{[^}]*\}/g, "")
-    .replace(/\{[^\n}]*$/gm, "");
+  var source = trimAssOverrideTail(text);
+  var drawing = false;
+  var output = "";
+  var offset = 0;
+  var blocks = /\{([^}]*)\}/g;
+  var match;
+  while ((match = blocks.exec(source))) {
+    if (!drawing) output += source.slice(offset, match.index);
+    var block = match[1];
+    var depth = 0;
+    for (var index = 0; index < block.length; index += 1) {
+      var character = block[index];
+      if (character === "(") depth += 1;
+      else if (character === ")") depth = Math.max(0, depth - 1);
+      else if (character === "\\" && depth === 0) {
+        var tag = block.slice(index + 1);
+        var mode = /^p(-?\d+)(?=\\|\s|$)/.exec(tag);
+        if (mode) drawing = Number(mode[1]) > 0;
+        else if (tag[0] === "r") drawing = false;
+      }
+    }
+    offset = blocks.lastIndex;
+  }
+  if (!drawing) output += source.slice(offset);
+  return output
+    .replace(/\\[Nn]/g, "\n")
+    .replace(/\\h/g, " ")
+    .trim();
 }
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {
   var cueBlocks = [];
@@ -1668,8 +1653,11 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
   frames.forEach(function (frame, index) {
     var rawText = normalizeTextSubtitlePayload(track, frame.payload);
     if (!rawText) return;
-    var text = sanitizePlainTextAssCue(rawText);
-    if (!text || isAssMarkupResidue(text)) return;
+    var assContext = isAssTextSubtitleTrack(track) || hasAssOverrideTags(rawText);
+    hasOverrides = hasOverrides || hasAssOverrideTags(rawText);
+    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(rawText);
+    var text = assContext ? sanitizePlainTextAssCue(rawText) : rawText;
+    if (!text || (assContext && isAssMarkupResidue(text))) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
     if (!Number.isFinite(cueStartMs) || cueEndMs <= startMs || cueStartMs >= endMs) return;
@@ -1689,8 +1677,6 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
     }
     outputBytes += blockBytes;
     cueBlocks.push(block);
-    hasOverrides = hasOverrides || hasAssOverrideTags(text);
-    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(text);
   });
   var body = "WEBVTT\n\n" + (cueBlocks.length ? cueBlocks.join("\n\n") + "\n\n" : "");
   var includeAssBody =

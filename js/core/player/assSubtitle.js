@@ -141,53 +141,53 @@ function formatVttTimestamp(totalSeconds) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
 }
 
-// Strips literal backslash escapes that collide with brace accounting.
-function stripAssTextEscapes(value) {
-  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
+// A numeric coordinate tail immediately followed by an override command is a
+// damaged event signature. A comma or unmatched brace in prose is not enough.
+function isAssMarkupResidue(text) {
+  return /^\s*[-+]?\d+(?:\.\d+)?(?:\s*,\s*[-+]?\d+(?:\.\d+)?)+\s*\)\s*\\(?:pos\(|move\(|org\(|clip\(|iclip\(|fr[xyz]?[-+]?\d|fsp[-+]?\d|[1-4]?c&)/i.test(
+    String(text || "")
+  );
 }
 
-// Matches a known ASS command that marks tag residue: positioning and
-// transform commands with `(`, color commands with `&`, or sized commands
-// with a digit suffix (e.g. `\pos(`, `\c&`, `\frz3`). Bare `\p` drawing
-// toggles and generic backslash uses never match.
-const ASS_MARKUP_COMMAND_RE =
-  /\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
+function trimAssOverrideTail(text) {
+  return String(text || "").replace(/\{\s*\\[A-Za-z1-4][^}]*$/, "");
+}
 
-// True only for override-tag residue. Balanced override blocks and
-// parenthesized groups are stripped first; what remains is residue when a
-// backslash ASS command survives together with leftover brace imbalance
-// (cut block) or CSV-shaped context (sliced event row). Balanced tagged
-// text, plain backslash uses (`C:\fs2`), and `a}b`-style prose never match,
-// so no legitimate dialogue is dropped and Text positions are never guessed.
-function isAssMarkupResidue(text) {
-  const value = stripAssTextEscapes(text);
-  if (value.indexOf("\\") < 0 || !ASS_MARKUP_COMMAND_RE.test(value)) {
-    return false;
+// Track drawing mode across blocks. Only top-level tags change the mode;
+// transform arguments are not immediate drawing commands.
+function sanitizePlainTextAssCue(text) {
+  var source = trimAssOverrideTail(text);
+  var drawing = false;
+  var output = "";
+  var offset = 0;
+  var blocks = /\{([^}]*)\}/g;
+  var match;
+  while ((match = blocks.exec(source))) {
+    if (!drawing) output += source.slice(offset, match.index);
+    var block = match[1];
+    var depth = 0;
+    for (var index = 0; index < block.length; index += 1) {
+      var character = block[index];
+      if (character === "(") depth += 1;
+      else if (character === ")") depth = Math.max(0, depth - 1);
+      else if (character === "\\" && depth === 0) {
+        var tag = block.slice(index + 1);
+        var mode = /^p(-?\d+)(?=\\|\s|$)/.exec(tag);
+        if (mode) drawing = Number(mode[1]) > 0;
+        else if (tag[0] === "r") drawing = false;
+      }
+    }
+    offset = blocks.lastIndex;
   }
-  const flattened = value.replace(/\{[^}]*\}/g, "").replace(/\([^()]*\)/g, "");
-  if (flattened.split("{").length !== flattened.split("}").length) {
-    return true;
-  }
-  return flattened.indexOf(",") >= 0;
+  if (!drawing) output += source.slice(offset);
+  return output
+    .replace(/\\[Nn]/g, "\n")
+    .replace(/\\h/g, " ")
+    .trim();
 }
 
 function sanitizeAssDialogueText(text) {
-  return (
-    String(text || "")
-      .replace(/\\[Nn]/g, "\n")
-      .replace(/\\h/g, " ")
-      // Vector drawings carry no readable dialogue. The opener must not
-      // contain `\p0` (so `{\p1\p0}` is not mistaken for an opener) and the
-      // closer must be a bare `{\p0}` (so chained `{\p0\p1}` blocks do not
-      // split the span early). An unclosed drawing runs to the event end.
-      .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*?\{\s*\\p0\s*\}/gi, "")
-      .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*$/gi, "")
-      .replace(/\{[^}]*\}/g, "")
-      // A truncated final override block (no closing brace) is tag source,
-      // not dialogue.
-      .replace(/\{[^\n}]*$/gm, "")
-      .trim()
-  );
+  return sanitizePlainTextAssCue(text);
 }
 
 const ASS_POSITION_RE = /\\pos\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i;
