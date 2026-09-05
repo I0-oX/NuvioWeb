@@ -141,12 +141,53 @@ function formatVttTimestamp(totalSeconds) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
 }
 
+// Strips literal backslash escapes that collide with brace accounting.
+function stripAssTextEscapes(value) {
+  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
+}
+
+// Matches a known ASS command that marks tag residue: positioning and
+// transform commands with `(`, color commands with `&`, or sized commands
+// with a digit suffix (e.g. `\pos(`, `\c&`, `\frz3`). Bare `\p` drawing
+// toggles and generic backslash uses never match.
+const ASS_MARKUP_COMMAND_RE =
+  /\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
+
+// True only for override-tag residue. Balanced override blocks and
+// parenthesized groups are stripped first; what remains is residue when a
+// backslash ASS command survives together with leftover brace imbalance
+// (cut block) or CSV-shaped context (sliced event row). Balanced tagged
+// text, plain backslash uses (`C:\fs2`), and `a}b`-style prose never match,
+// so no legitimate dialogue is dropped and Text positions are never guessed.
+function isAssMarkupResidue(text) {
+  const value = stripAssTextEscapes(text);
+  if (value.indexOf("\\") < 0 || !ASS_MARKUP_COMMAND_RE.test(value)) {
+    return false;
+  }
+  const flattened = value.replace(/\{[^}]*\}/g, "").replace(/\([^()]*\)/g, "");
+  if (flattened.split("{").length !== flattened.split("}").length) {
+    return true;
+  }
+  return flattened.indexOf(",") >= 0;
+}
+
 function sanitizeAssDialogueText(text) {
-  return String(text || "")
-    .replace(/\\[Nn]/g, "\n")
-    .replace(/\\h/g, " ")
-    .replace(/\{[^}]*\}/g, "")
-    .trim();
+  return (
+    String(text || "")
+      .replace(/\\[Nn]/g, "\n")
+      .replace(/\\h/g, " ")
+      // Vector drawings carry no readable dialogue. The opener must not
+      // contain `\p0` (so `{\p1\p0}` is not mistaken for an opener) and the
+      // closer must be a bare `{\p0}` (so chained `{\p0\p1}` blocks do not
+      // split the span early). An unclosed drawing runs to the event end.
+      .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*?\{\s*\\p0\s*\}/gi, "")
+      .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*$/gi, "")
+      .replace(/\{[^}]*\}/g, "")
+      // A truncated final override block (no closing brace) is tag source,
+      // not dialogue.
+      .replace(/\{[^\n}]*$/gm, "")
+      .trim()
+  );
 }
 
 const ASS_POSITION_RE = /\\pos\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i;
@@ -471,6 +512,11 @@ export function convertAssDialogueToVttCues(body) {
     const end = parseAssTimestamp(record.end);
     const text = sanitizeAssDialogueText(record.text);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) {
+      return;
+    }
+    // Tag residue is not dialogue in any renderer: drop the cue instead of
+    // projecting override source as visible text.
+    if (isAssMarkupResidue(text)) {
       return;
     }
     const rawText = String(record.text || "");

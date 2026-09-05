@@ -1269,6 +1269,13 @@ function getAssDialogueText(track, frame) {
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
+  // Drop only provable tag residue (backslash plus unbalanced braces plus
+  // an ASS command marker); balanced tagged text passes through untouched.
+  // The tail rule below rescues readable heads of truncated blocks.
+  var cleanText = text.replace(/\{[^\n}]*$/gm, "");
+  if (isAssMarkupResidue(cleanText)) {
+    return "";
+  }
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
@@ -1295,7 +1302,7 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     /^-?\d+$/.test(String(fields[6] || "").trim()) &&
     String(fields[7] || "").trim() === "";
   var hasStructuredFields = hasShortTiming || hasPositionalShape;
-  var assText = text.replace(/\r?\n/g, "\\N");
+  var assText = cleanText.replace(/\r?\n/g, "\\N");
   // Positional form carries the ASS Layer in fields[0]; short SSA has none,
   // so default it to 0. Preserve a non-zero layer to keep stacking order.
   var layer = hasPositionalShape ? String(fields[0] || "").trim() || "0" : "0";
@@ -1621,14 +1628,48 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
+function stripAssTextEscapes(value) {
+  return String(value || "").replace(/\\\\|\\[NnHh]/g, "");
+}
+
+var ASS_MARKUP_COMMAND_RE =
+  /\\(?:pos|move|org|clip|iclip|fad|fade|t)\s*\(|\\(?:[1-4]?c|alpha|[1-4]?a)&|\\(?:an[1-9]|fsp[-+]?\d|fs\d|fr[xyz]?[-+]?\d|x?bord\d|x?shad\d|blur\d|be\d|q[0-3]|pbo[-+]?\d)(?=[^A-Za-z]|$)/i;
+
+// See js/core/player/assSubtitle.js: true only for override-tag residue, so
+// legitimate dialogue is never dropped and Text positions never guessed.
+function isAssMarkupResidue(text) {
+  var value = stripAssTextEscapes(text);
+  if (value.indexOf("\\") < 0 || !ASS_MARKUP_COMMAND_RE.test(value)) {
+    return false;
+  }
+  var flattened = value.replace(/\{[^}]*\}/g, "").replace(/\([^()]*\)/g, "");
+  if (flattened.split("{").length !== flattened.split("}").length) {
+    return true;
+  }
+  return flattened.indexOf(",") >= 0;
+}
+
+// Plain-text pipelines (VTT/HTML/native) cannot render ASS vector drawings:
+// drop drawing sections (strict closers, tempered openers, same rules as the
+// app converter) and strip balanced override blocks so only readable text
+// ships. The ASS body keeps drawable payloads for ass.js.
+function sanitizePlainTextAssCue(text) {
+  return String(text || "")
+    .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*?\{\s*\\p0\s*\}/gi, "")
+    .replace(/\{((?:(?!\\p0)[^}])*?)\\p[1-9]((?:(?!\\p0)[^}])*)\}[\s\S]*$/gi, "")
+    .replace(/\{[^}]*\}/g, "")
+    .replace(/\{[^\n}]*$/gm, "");
+}
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {
   var cueBlocks = [];
   var outputBytes = Buffer.byteLength("WEBVTT\n\n", "utf8");
   var hasOverrides = false;
   var hasAdvancedOverrides = false;
   frames.forEach(function (frame, index) {
-    var text = normalizeTextSubtitlePayload(track, frame.payload);
-    if (!text) return;
+    var rawText = normalizeTextSubtitlePayload(track, frame.payload);
+    if (!rawText) return;
+    var text = sanitizePlainTextAssCue(rawText);
+    if (!text || isAssMarkupResidue(text)) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
     if (!Number.isFinite(cueStartMs) || cueEndMs <= startMs || cueStartMs >= endMs) return;
