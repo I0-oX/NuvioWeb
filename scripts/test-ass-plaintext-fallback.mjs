@@ -357,6 +357,50 @@ for (const envelope of [
   }
 }
 
+// Isolate adapter acceptance from ass.js parsing: rendered dialogue must not
+// be reclassified as control data by inspecting DOM text.
+const { createAssRenderer } = await import("../js/core/player/assRenderer.js");
+const previousAss = Object.getOwnPropertyDescriptor(globalThis, "ASS");
+const previousObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+try {
+  globalThis.ResizeObserver = class {};
+  for (const renderedText of [
+    "533,2,Onscreen1,Screen,0,0,0,Banner,Hello",
+    "Dialogue: 0,0:00:01.00,0:00:02.00 is an example"
+  ]) {
+    let destroyed = false;
+    const container = {
+      textContent: "",
+      replaceChildren() {
+        this.textContent = "";
+      }
+    };
+    globalThis.ASS = class {
+      constructor() {
+        container.textContent = renderedText;
+      }
+      destroy() {
+        destroyed = true;
+      }
+    };
+    const renderer = createAssRenderer({
+      body: assBody([renderedText]),
+      video: { paused: true },
+      container
+    });
+    const result = await renderer.init();
+    check("renderer accepts literal field-shaped dialogue", result.ok, true);
+    check("renderer keeps field-shaped dialogue visible", container.textContent, renderedText);
+    check("renderer does not destroy valid output", destroyed, false);
+    renderer.destroy();
+  }
+} finally {
+  if (previousAss) Object.defineProperty(globalThis, "ASS", previousAss);
+  else delete globalThis.ASS;
+  if (previousObserver) Object.defineProperty(globalThis, "ResizeObserver", previousObserver);
+  else delete globalThis.ResizeObserver;
+}
+
 if (failures > 0) {
   console.error(`${failures} failing case(s)`);
   process.exit(1);
