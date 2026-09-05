@@ -185,9 +185,9 @@ check(
   true
 );
 check(
-  "ASS body preserves fragment for renderer interpretation",
+  "ASS body drops narrow numeric fragment in both paths",
   window.assBody.includes("frz358"),
-  true
+  false
 );
 check(
   "ASS body keeps tagged event intact",
@@ -324,8 +324,8 @@ for (const payload of [
   );
 }
 
-// VTT applies heuristic filtering; ASS preserves extracted Text for ass.js.
-// Matching this signature does not prove that literal dialogue is corrupt.
+// Narrow numeric-fragment signature drops in both paths; unfinished tails
+// stay intact for ass.js while VTT shows the readable head.
 for (const envelope of [
   (text) => `7,2,Default,,0,0,0,,${text}`,
   (text) => `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${text}`
@@ -336,11 +336,7 @@ for (const envelope of [
       "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,Tail {\\fad(200,200",
       "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nTail\n\n"
     ],
-    [
-      "320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
-      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
-      "WEBVTT\n\n"
-    ]
+    ["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing", "", "WEBVTT\n\n"]
   ]) {
     const result = service.buildTextSubtitleWindowPayload(
       track,
@@ -350,7 +346,7 @@ for (const envelope of [
       {}
     );
     check(
-      `ASS preserves exact event without fallback filtering: ${text}`,
+      `ASS narrow signature has exact event output: ${text}`,
       result.assBody
         .split("\n")
         .filter((line) => line.startsWith("Dialogue:"))

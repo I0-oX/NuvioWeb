@@ -1242,8 +1242,12 @@ function getAssDialogueText(track, frame) {
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
-  // Leave interpretation to ass.js; fallback heuristics must not rewrite ASS.
+  // Drop only the narrow numeric-fragment signature in both paths; leave
+  // interpretation of everything else to ass.js.
   var cleanText = text;
+  if (isAssMarkupResidue(cleanText)) {
+    return "";
+  }
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
