@@ -1019,26 +1019,6 @@ function isAssTextSubtitleTrack(track) {
   );
 }
 
-function isAssTimestamp(value) {
-  return /^\s*\d+:\d{1,2}:\d{1,2}[.:]\d{1,3}\s*$/.test(String(value || ""));
-}
-
-function parseAssTimestampMs(value) {
-  var match = String(value || "")
-    .trim()
-    .match(/^(\d+):(\d{1,2}):(\d{1,2})[.:](\d{1,3})$/);
-  if (!match) return NaN;
-  var fraction = String(match[4] || "0")
-    .slice(0, 3)
-    .padEnd(3, "0");
-  return (
-    Number(match[1]) * 3600000 +
-    Number(match[2]) * 60000 +
-    Number(match[3]) * 1000 +
-    Number(fraction)
-  );
-}
-
 function textAfterCommaCount(value, commaCount) {
   var text = String(value || "");
   var offset = 0;
@@ -1078,39 +1058,19 @@ function normalizeTextSubtitlePayload(track, payload) {
   var text = decodeTextSubtitlePayload(payload);
   if (!text) return "";
 
-  var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
-  // Only explicitly framed Dialogue rows carry textual timestamps.
-  var timedDialogue = isAssTextSubtitleTrack(track) && /^\s*Dialogue\s*:/i.test(text);
-  var fields = assEvent.split(",");
-
-  var hasLayeredAssTiming =
-    timedDialogue &&
-    fields.length >= 3 &&
-    /^(?:marked\s*=\s*)?-?\d+$/i.test(String(fields[0] || "").trim()) &&
-    isAssTimestamp(fields[1]) &&
-    isAssTimestamp(fields[2]);
-  var hasShortAssTiming =
-    timedDialogue && fields.length >= 3 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
+  var fields = text.split(",");
   // Matroska ASS blocks contain ReadOrder, Layer, Style, Name, margins,
   // Effect and Text; timestamps come from the enclosing block.
   var hasPositionalAssShape =
     isAssTextSubtitleTrack(track) &&
-    !hasLayeredAssTiming &&
-    !hasShortAssTiming &&
     fields.length >= 9 &&
     /^-?\d+$/.test(String(fields[0] || "").trim()) &&
     /^-?\d+$/.test(String(fields[1] || "").trim()) &&
     /^-?\d+$/.test(String(fields[4] || "").trim()) &&
     /^-?\d+$/.test(String(fields[5] || "").trim()) &&
     /^-?\d+$/.test(String(fields[6] || "").trim());
-  if (hasLayeredAssTiming) {
-    text = textAfterCommaCount(assEvent, 9) || "";
-  } else if (hasShortAssTiming) {
-    text = textAfterCommaCount(assEvent, fields.length >= 9 ? 8 : 2) || "";
-  } else if (hasPositionalAssShape) {
-    text = textAfterCommaCount(assEvent, 8) || "";
-  } else if (isAssTextSubtitleTrack(track)) {
-    text = assEvent;
+  if (hasPositionalAssShape) {
+    text = textAfterCommaCount(text, 8) || "";
   }
 
   return text.replace(/\n{2,}/g, "\n").trim();
@@ -1124,39 +1084,13 @@ function hasAdvancedAssOverrideTags(text) {
   return /\{[^}\r\n]*\\(?!(?:an[1-9]\b|[NnHh]\b))[A-Za-z0-9]/i.test(String(text || ""));
 }
 
-function getEmbeddedAssCueDurationMs(frame) {
-  var raw = decodeTextSubtitlePayload(frame && frame.payload);
-  if (!/^\s*Dialogue\s*:/i.test(raw)) return 0;
-  var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
-  var fields = event.split(",");
-  var startIndex = -1;
-  var endIndex = -1;
-  if (fields.length >= 3 && isAssTimestamp(fields[1]) && isAssTimestamp(fields[2])) {
-    startIndex = 1;
-    endIndex = 2;
-  } else if (fields.length >= 2 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1])) {
-    startIndex = 0;
-    endIndex = 1;
-  }
-  if (startIndex < 0) return 0;
-  var startMs = parseAssTimestampMs(fields[startIndex]);
-  var endMs = parseAssTimestampMs(fields[endIndex]);
-  return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
-    ? endMs - startMs
-    : 0;
-}
-
 function getTextCueEndMs(frame, nextFrame) {
   var startMs = Number(frame && frame.timestampMs);
   if (!Number.isFinite(startMs)) return 0;
-  // BlockDuration is authoritative, even for explicitly framed legacy rows.
+  // Subtitle timing comes from the enclosing Matroska block, never Text.
   var durationMs = Number(frame && frame.durationMs);
   if (Number.isFinite(durationMs) && durationMs > 0) {
     return startMs + Math.min(durationMs, MAX_TEXT_CUE_DURATION_MS);
-  }
-  var embeddedDurationMs = getEmbeddedAssCueDurationMs(frame);
-  if (embeddedDurationMs > 0) {
-    return startMs + Math.min(embeddedDurationMs, MAX_TEXT_CUE_DURATION_MS);
   }
   var nextStartMs = Number(nextFrame && nextFrame.timestampMs);
   if (Number.isFinite(nextStartMs) && nextStartMs > startMs) {
@@ -1264,25 +1198,7 @@ function buildAssDialogueLine(track, frame, nextFrame) {
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
   var raw = decodeTextSubtitlePayload(frame && frame.payload);
-  var timedDialogue = isAssTextSubtitleTrack(track) && /^\s*Dialogue\s*:/i.test(raw);
-  var event = raw.replace(/^\s*Dialogue\s*:\s*/i, "");
-  var fields = event.split(",");
-  if (
-    timedDialogue &&
-    fields.length >= 10 &&
-    isAssTimestamp(fields[1]) &&
-    isAssTimestamp(fields[2])
-  ) {
-    fields[1] = formatAssTimestamp(startMs);
-    fields[2] = formatAssTimestamp(endMs);
-    return "Dialogue: " + fields.slice(0, 9).concat(cleanText).join(",");
-  }
-  // Preserve leading ASS fields only for the two shapes that carry them.
-  // Metadata alone is not enough: webOS can expose ordinary cue text as a
-  // comma-separated row, and treating its first fields as Style/Name/Margins
-  // duplicates that prefix in the generated Dialogue line.
-  var hasShortTiming =
-    timedDialogue && fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
+  var fields = raw.split(",");
   var hasPositionalShape =
     isAssTextSubtitleTrack(track) &&
     fields.length >= 9 &&
@@ -1291,7 +1207,7 @@ function buildAssDialogueLine(track, frame, nextFrame) {
     /^-?\d+$/.test(String(fields[4] || "").trim()) &&
     /^-?\d+$/.test(String(fields[5] || "").trim()) &&
     /^-?\d+$/.test(String(fields[6] || "").trim());
-  var hasStructuredFields = hasShortTiming || hasPositionalShape;
+  var hasStructuredFields = hasPositionalShape;
   var assText = cleanText.replace(/\r?\n/g, "\\N");
   // Matroska stores ReadOrder first, then Layer; ReadOrder is not a layer.
   var layer = hasPositionalShape ? String(fields[1] || "").trim() || "0" : "0";

@@ -147,15 +147,13 @@ check(
 // --- Service VTT window: same guarantees end to end. ---
 const track = { codecId: "S_TEXT/ASS" };
 const toPayload = (line) => Buffer.from(line, "utf8");
-const drawingLine =
-  "Dialogue: 0,0:00:15.00,0:00:17.00,Default,,0,0,0,,{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}";
+const drawingLine = "0,0,Default,,0,0,0,,{\\p1}m 64.89 68.77 l 64.17 67.11{\\p0}";
 const fragmentLine =
-  "Dialogue: 0,0:00:12.00,0:00:14.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing";
-const taggedLine =
-  "Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
-const normalLine = "Dialogue: 0,0:00:18.00,0:00:20.00,Default,,0,0,0,,Normal line";
-const pathLine = "Dialogue: 0,0:00:21.00,0:00:23.00,Default,,0,0,0,,Path C:\\temp} ready";
-const tailLine = "Dialogue: 0,0:00:22.00,0:00:24.00,Default,,0,0,0,,Tail {\\fad(200,200";
+  "1,0,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing";
+const taggedLine = "2,0,Default,,0,0,0,,{\\an8\\pos(1011.12,955.26)}Placed";
+const normalLine = "3,0,Default,,0,0,0,,Normal line";
+const pathLine = "4,0,Default,,0,0,0,,Path C:\\temp} ready";
+const tailLine = "5,0,Default,,0,0,0,,Tail {\\fad(200,200";
 const window = service.buildTextSubtitleWindowPayload(
   track,
   [
@@ -295,13 +293,11 @@ check(
 );
 
 // The renderer receives every balanced tag; only plain-text fallback removes
-// drawing paths and override syntax. Exercise both supported event envelopes.
+// drawing paths and override syntax. Embedded input uses Matroska packets.
 const animatedText =
   "{\\move(10,20,30,40,0,500)\\t(0,500,\\fscx120)}{\\p1}m 0 0 l 10 10{\\p0}{\\k20}Hello, {\\kf30}world";
-for (const payload of [
-  `7,2,Default,,0,0,0,,${animatedText}`,
-  `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${animatedText}`
-]) {
+{
+  const payload = `7,2,Default,,0,0,0,,${animatedText}`;
   const animatedWindow = service.buildTextSubtitleWindowPayload(
     track,
     [{ payload: toPayload(payload), timestampMs: 1000, durationMs: 1000 }],
@@ -325,10 +321,8 @@ for (const payload of [
 }
 
 // Only VTT applies content heuristics; ASS preserves extracted Text exactly.
-for (const envelope of [
-  (text) => `7,2,Default,,0,0,0,,${text}`,
-  (text) => `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${text}`
-]) {
+{
+  const envelope = (text) => `7,2,Default,,0,0,0,,${text}`;
   for (const [text, expectedEvent, expectedVtt] of [
     [
       "Tail {\\fad(200,200",
