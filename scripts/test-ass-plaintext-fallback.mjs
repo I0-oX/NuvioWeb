@@ -185,9 +185,9 @@ check(
   true
 );
 check(
-  "ASS body drops narrow numeric fragment in both paths",
+  "ASS body preserves extracted text regardless of numeric signature",
   window.assBody.includes("frz358"),
-  false
+  true
 );
 check(
   "ASS body keeps tagged event intact",
@@ -324,8 +324,7 @@ for (const payload of [
   );
 }
 
-// Narrow numeric-fragment signature drops in both paths; unfinished tails
-// stay intact for ass.js while VTT shows the readable head.
+// Only VTT applies content heuristics; ASS preserves extracted Text exactly.
 for (const envelope of [
   (text) => `7,2,Default,,0,0,0,,${text}`,
   (text) => `Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,${text}`
@@ -336,7 +335,11 @@ for (const envelope of [
       "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,Tail {\\fad(200,200",
       "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nTail\n\n"
     ],
-    ["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing", "", "WEBVTT\n\n"]
+    [
+      "320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
+      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
+      "WEBVTT\n\n"
+    ]
   ]) {
     const result = service.buildTextSubtitleWindowPayload(
       track,
@@ -346,7 +349,7 @@ for (const envelope of [
       {}
     );
     check(
-      `ASS narrow signature has exact event output: ${text}`,
+      `ASS preserves exact extracted event: ${text}`,
       result.assBody
         .split("\n")
         .filter((line) => line.startsWith("Dialogue:"))
@@ -356,6 +359,45 @@ for (const envelope of [
     check(`VTT filtering exception has exact output: ${text}`, result.body, expectedVtt);
   }
 }
+const customHeader = [
+  "[Script Info]",
+  "PlayResX: 1280",
+  "PlayResY: 720",
+  "[V4+ Styles]",
+  "Format: Name, Fontname, Fontsize",
+  "Style: Onscreen1,Arial,42",
+  "[Events]",
+  "Format: Start, End, Layer, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+].join("\n");
+const headerWindow = service.buildTextSubtitleWindowPayload(
+  { codecId: "S_TEXT/ASS", codecPrivate: Buffer.from(customHeader) },
+  [
+    {
+      payload: toPayload("533,2,Onscreen1,Screen,0,0,0,,{\\pos(320,240)}Hello, world"),
+      timestampMs: 1000,
+      durationMs: 1000
+    }
+  ],
+  0,
+  3000,
+  {}
+);
+check(
+  "reconstructed events match declared column order",
+  JSON.stringify(
+    convertAssDialogueToVttCues(headerWindow.assBody).map(({ start, end, text }) => ({
+      start,
+      end,
+      text
+    }))
+  ),
+  JSON.stringify([{ start: 1, end: 2, text: "Hello, world" }])
+);
+check(
+  "header reconstruction preserves resolution and styles",
+  headerWindow.assBody.slice(0, headerWindow.assBody.indexOf("[Events]")),
+  customHeader.slice(0, customHeader.indexOf("[Events]"))
+);
 
 // Isolate adapter acceptance from ass.js parsing: rendered dialogue must not
 // be reclassified as control data by inspecting DOM text.

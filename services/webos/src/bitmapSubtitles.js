@@ -1232,7 +1232,23 @@ function normalizeAssHeader(codecPrivate) {
   ) {
     return buildDefaultAssHeader();
   }
-  return header + "\n";
+  // Rebuilt Matroska events use canonical columns, regardless of the source
+  // script's Events Format. Preserve all other sections (styles, fonts, info).
+  var inEvents = false;
+  return (
+    header
+      .split("\n")
+      .map(function (line) {
+        if (/^\s*\[.*\]\s*$/.test(line)) {
+          inEvents = /^\s*\[Events\]\s*$/i.test(line);
+        }
+        if (inEvents && /^\s*Format\s*:/i.test(line)) {
+          return "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
+        }
+        return line;
+      })
+      .join("\n") + "\n"
+  );
 }
 
 function getAssDialogueText(track, frame) {
@@ -1242,12 +1258,8 @@ function getAssDialogueText(track, frame) {
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
-  // Drop only the narrow numeric-fragment signature in both paths; leave
-  // interpretation of everything else to ass.js.
+  // Preserve extracted ASS Text; interpreting visible content is the renderer's job.
   var cleanText = text;
-  if (isAssMarkupResidue(cleanText)) {
-    return "";
-  }
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
