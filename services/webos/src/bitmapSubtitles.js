@@ -1192,8 +1192,8 @@ function getAssDialogueText(track, frame) {
 function buildAssDialogueLine(track, frame, nextFrame) {
   var text = getAssDialogueText(track, frame);
   if (!text) return "";
-  // Preserve extracted ASS Text; interpreting visible content is the renderer's job.
-  var cleanText = text;
+  // Preserve complete overrides; an unfinished override tail is not display text.
+  var cleanText = trimAssOverrideTail(text);
   var startMs = Number(frame && frame.timestampMs);
   var endMs = getTextCueEndMs(frame, nextFrame);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
@@ -1533,14 +1533,6 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
-// A numeric coordinate tail immediately followed by an override command is a
-// damaged event signature. A comma or unmatched brace in prose is not enough.
-function isAssMarkupResidue(text) {
-  return /^\s*[-+]?\d+(?:\.\d+)?(?:\s*,\s*[-+]?\d+(?:\.\d+)?)+\s*\)\s*\\(?:pos\(|move\(|org\(|clip\(|iclip\(|fr[xyz]?[-+]?\d|fsp[-+]?\d|[1-4]?c&)/i.test(
-    String(text || "")
-  );
-}
-
 function trimAssOverrideTail(text) {
   return String(text || "").replace(/\{\s*\\[A-Za-z1-4][^}]*$/, "");
 }
@@ -1589,7 +1581,7 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
     hasOverrides = hasOverrides || hasAssOverrideTags(rawText);
     hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(rawText);
     var text = assContext ? sanitizePlainTextAssCue(rawText) : rawText;
-    if (!text || (assContext && isAssMarkupResidue(text))) return;
+    if (!text) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
     if (!Number.isFinite(cueStartMs) || cueEndMs <= startMs || cueStartMs >= endMs) return;

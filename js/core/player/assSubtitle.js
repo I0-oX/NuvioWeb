@@ -141,14 +141,6 @@ function formatVttTimestamp(totalSeconds) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(milliseconds, 3)}`;
 }
 
-// A numeric coordinate tail immediately followed by an override command is a
-// damaged event signature. A comma or unmatched brace in prose is not enough.
-function isAssMarkupResidue(text) {
-  return /^\s*[-+]?\d+(?:\.\d+)?(?:\s*,\s*[-+]?\d+(?:\.\d+)?)+\s*\)\s*\\(?:pos\(|move\(|org\(|clip\(|iclip\(|fr[xyz]?[-+]?\d|fsp[-+]?\d|[1-4]?c&)/i.test(
-    String(text || "")
-  );
-}
-
 function trimAssOverrideTail(text) {
   return String(text || "").replace(/\{\s*\\[A-Za-z1-4][^}]*$/, "");
 }
@@ -512,11 +504,6 @@ export function convertAssDialogueToVttCues(body) {
     const end = parseAssTimestamp(record.end);
     const text = sanitizeAssDialogueText(record.text);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) {
-      return;
-    }
-    // Tag residue is not dialogue in any renderer: drop the cue instead of
-    // projecting override source as visible text.
-    if (isAssMarkupResidue(text)) {
       return;
     }
     const rawText = String(record.text || "");

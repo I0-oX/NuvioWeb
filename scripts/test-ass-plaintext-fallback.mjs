@@ -1,16 +1,12 @@
-// Focused regression tests: plain-text subtitle pipelines (VTT/HTML/native
-// fallback) must never project ASS internals as cue text, and must never
-// drop legitimate dialogue to achieve it.
+// Regression tests for preserving literal dialogue and separating plain-text
+// fallback sanitation from complete ASS override rendering.
 // Run: node ./scripts/test-ass-plaintext-fallback.mjs
 //
 // Covered units:
 // - js/core/player/assSubtitle.js (external-file VTT fallback)
-// - services/webos/src/bitmapSubtitles.js (embedded VTT window body and ASS
-//   body event filtering; well-formed payloads pass through untouched).
-//
-// Drawing mode is stateful. Commas, literal commands and unmatched prose
-// braces are not evidence of corruption. Numeric cut-tag prefixes are
-// suppressed conservatively; arbitrary malformed event recovery is not attempted.
+// - services/webos/src/bitmapSubtitles.js (embedded VTT and reconstructed ASS)
+// Drawing mode is stateful. Numeric prefixes and bare commands remain literal.
+// Unfinished override tails are removed without dropping their readable heads.
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -80,19 +76,19 @@ check(
   JSON.stringify(["Sign"])
 );
 
-// --- Provable tag residue is suppressed, never projected. ---
+// Unbraced commands are literal text, not evidence of corruption.
 check(
-  "mid-tag fragment yields no cue",
+  "numeric prefix and commands preserve literal dialogue",
   JSON.stringify(
     vttCueTexts(assBody(["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing"]))
   ),
-  JSON.stringify([])
+  JSON.stringify(["320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing"])
 );
 
 check(
-  "photo fragment without braces but with command yields no cue",
+  "numeric prefix without braces remains literal",
   JSON.stringify(vttCueTexts(assBody(["11.12,955.26,-783.88)\\fsp0.0"]))),
-  JSON.stringify([])
+  JSON.stringify(["11.12,955.26,-783.88)\\fsp0.0"])
 );
 
 // --- Legitimate text is never dropped. ---
@@ -170,7 +166,7 @@ const window = service.buildTextSubtitleWindowPayload(
 );
 
 check("VTT body has no drawing coordinates", window.body.includes("64.89"), false);
-check("VTT body has no tag fragment", window.body.includes("frz358"), false);
+check("VTT preserves unbraced literal command text", window.body.includes("frz358"), true);
 check("VTT body keeps readable cue", window.body.includes("Normal line"), true);
 check("VTT body keeps placed cue text", window.body.includes("Placed"), true);
 check("VTT body has no override braces", window.body.includes("{\\an8"), false);
@@ -225,9 +221,9 @@ for (const [input, expected] of adversarialCases) {
   check(`styled preserves ${input}`, result.assBody.includes(input), true);
 }
 check(
-  "styled complete event preserves unfinished override",
+  "styled event excludes unfinished override tail",
   window.assBody.includes("fad(200,200"),
-  true
+  false
 );
 check("window preserves advanced styling signal", window.hasAdvancedAssOverrideTags, true);
 const plainWindow = service.buildTextSubtitleWindowPayload(
@@ -320,19 +316,19 @@ const animatedText =
   );
 }
 
-// Only VTT applies content heuristics; ASS preserves extracted Text exactly.
+// Both outputs retain literal text; only an unfinished override tail is removed.
 {
   const envelope = (text) => `7,2,Default,,0,0,0,,${text}`;
   for (const [text, expectedEvent, expectedVtt] of [
     [
       "Tail {\\fad(200,200",
-      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,Tail {\\fad(200,200",
+      "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,Tail ",
       "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nTail\n\n"
     ],
     [
       "320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
       "Dialogue: 2,0:00:01.00,0:00:02.00,Default,,0,0,0,,320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing",
-      "WEBVTT\n\n"
+      "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\n320,820,640)\\frz358.4\\org(1889.15,82.92)\\c&H1B1516&}Menacing\n\n"
     ]
   ]) {
     const result = service.buildTextSubtitleWindowPayload(
